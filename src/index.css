@@ -378,3 +378,84 @@ button:focus-visible { outline: 2px solid var(--site-green); outline-offset: 2px
 @media (prefers-reduced-motion: reduce) {
   *, *::before, *::after { animation-duration: .01ms !important; transition-duration: .01ms !important; scroll-behavior: auto !important; }
 }
+
+
+/* ================= Custom Themes & Enhancements ================= */
+[data-theme="wood"] {
+  --board-light: #d8b88a;
+  --board-dark: #8c5226;
+  --last-move-light: #e0ca65;
+  --last-move-dark: #af7c36;
+  --selected: #c49942;
+}
+
+[data-theme="blue"] {
+  --board-light: #dee3e6;
+  --board-dark: #4b7399;
+  --last-move-light: #a9cfeb;
+  --last-move-dark: #6297c4;
+  --selected: #73a9d4;
+}
+
+[data-theme="dark"] {
+  --board-light: #707070;
+  --board-dark: #3b3b3b;
+  --last-move-light: #949494;
+  --last-move-dark: #575757;
+  --selected: #7a7a7a;
+}
+
+.square.in-check {
+  background: radial-gradient(circle, #e63946 0%, #d62828 75%) !important;
+}
+
+.ruser-captures {
+  display: flex;
+  align-items: center;
+  gap: 2px;
+  font-size: 13px;
+  margin-left: 6px;
+}
+.captured-piece {
+  opacity: 0.85;
+}
+.score-diff {
+  font-size: 11px;
+  font-weight: 700;
+  color: var(--site-green);
+  margin-left: 4px;
+}
+
+.thinking-spinner {
+  display: inline-block;
+  width: 12px;
+  height: 12px;
+  border: 2px solid rgba(255, 255, 255, 0.3);
+  border-radius: 50%;
+  border-top-color: #fff;
+  animation: spin 0.8s linear infinite;
+}
+@keyframes spin {
+  to { transform: rotate(360deg); }
+}
+
+.game-settings-panel {
+  padding: 10px;
+  border-top: 1px solid #3c3934;
+  display: grid;
+  gap: 8px;
+  font-size: 12px;
+}
+.settings-row {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+}
+.settings-select {
+  background: #3c3934;
+  color: #eee;
+  border: 1px solid #555;
+  border-radius: 3px;
+  padding: 3px 6px;
+  font-size: 12px;
+}
