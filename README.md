@@ -1,15 +1,19 @@
-# TAICHESS para Windows
+# TAICHESS
 
-Esta es una copia independiente del código fuente de TAICHESS. No necesita PostgreSQL: las partidas se juegan localmente en el navegador.
+Variante de ajedrez con reglas FIDE y una excepción en **e4** y **e5**. La interfaz se inspira en una partida de [Lichess](https://lichess.org/): tablero verde, barra oscura, relojes y lista de jugadas.
 
-## Instalar y ejecutar
+## Jugar en la web (gratis, GitHub Pages)
 
-1. Extrae la carpeta `T-AICHESS` en `C:\Postgres\T-AICHESS`.
-2. Instala Node.js 22 LTS (o Node.js 20.19 o posterior) si aún no está instalado.
-3. Haz doble clic en `start.bat`. La primera ejecución descarga las dependencias.
-4. Cuando Vite indique que está listo, abre `http://localhost:5173`.
+Cuando el despliegue esté activo:
 
-También puedes ejecutarlo desde una terminal:
+**https://alejandro8aperez.github.io/T-AICHESS/**
+
+En el repositorio, Settings → Pages debe usar **GitHub Actions** como origen. Cada push a `main` vuelve a publicar el sitio.
+
+## Jugar en local
+
+1. Instala Node.js 22 LTS (o Node.js 20.19 o posterior).
+2. Ejecuta `start.bat` o, en una terminal:
 
 ```bat
 cd /d C:\Postgres\T-AICHESS
@@ -17,4 +21,6 @@ npm install --legacy-peer-deps
 npm run dev
 ```
 
-Las partidas no se guardan al cerrar o recargar la página.
+3. Abre `http://localhost:5173`.
+
+Las partidas no se guardan al recargar la página.

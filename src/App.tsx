@@ -1,4 +1,4 @@
-import { type ReactNode } from 'react';
+import { type ReactNode, useEffect, useState } from 'react';
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
 import { ErrorBoundary } from '@/components/error-boundary';
 import { Toaster } from '@/components/ui/toaster';
@@ -9,6 +9,7 @@ import { Route, Switch, useLocation, Router as WouterRouter } from 'wouter';
 
 const queryClient = new QueryClient();
 const files = ['a', 'b', 'c', 'd', 'e', 'f', 'g', 'h'];
+const INITIAL_CLOCK_MS = 10 * 60 * 1000;
 const pieceName: Record<PieceView['type'], string> = {
   k: 'rey',
   q: 'reina',
@@ -26,6 +27,24 @@ const pieceGlyph: Record<PieceView['type'], { w: string; b: string }> = {
   p: { w: '♙', b: '♟' },
 };
 
+function formatClock(ms: number) {
+  const total = Math.max(0, Math.ceil(ms / 1000));
+  const minutes = Math.floor(total / 60);
+  const seconds = total % 60;
+  return `${minutes}:${String(seconds).padStart(2, '0')}`;
+}
+
+function KnightMark() {
+  return (
+    <svg className="logo-knight" viewBox="0 0 40 40" aria-hidden="true">
+      <path
+        fill="currentColor"
+        d="M8 34h24v3H8zm4.2-3.2c.6-4.4 2.4-7.4 5.6-10.2-2.2-1.1-4.3-2.8-5.2-5.5-.5-1.6-.4-3.3.4-4.8.7 1.8 2.2 3 4.1 3.4-.7-2.6.2-5.2 2.4-6.8 1.2-.9 2.7-1.3 4.2-1.2-.8 1.6-.6 3.5.5 4.9 1.3 1.6 3.4 2.2 5.4 1.7-.4 2.3-1.6 4.3-3.4 5.7 3.1 1.6 5.4 4.5 6.2 8 .3 1.4.4 2.9.3 4.8H12.2z"
+      />
+    </svg>
+  );
+}
+
 function Game() {
   const {
     pieces,
@@ -41,6 +60,24 @@ function Game() {
     choosePiece,
     newGame,
   } = useTaichessGame();
+  const [flipped, setFlipped] = useState(false);
+  const [whiteMs, setWhiteMs] = useState(INITIAL_CLOCK_MS);
+  const [blackMs, setBlackMs] = useState(INITIAL_CLOCK_MS);
+
+  useEffect(() => {
+    if (isGameOver || pendingChoice) return undefined;
+    const id = window.setInterval(() => {
+      const setter = turn === 'w' ? setWhiteMs : setBlackMs;
+      setter((ms) => Math.max(0, ms - 100));
+    }, 100);
+    return () => window.clearInterval(id);
+  }, [turn, isGameOver, pendingChoice]);
+
+  const startNewGame = () => {
+    newGame();
+    setWhiteMs(INITIAL_CLOCK_MS);
+    setBlackMs(INITIAL_CLOCK_MS);
+  };
 
   const pieceAt = (square: string) => pieces.find((piece) => piece.square === square);
   const groupedHistory = Array.from({ length: Math.ceil(history.length / 2) }, (_, index) => ({
@@ -71,34 +108,55 @@ function Game() {
           : 'Puedes conservar esta pieza como alfil o caballo. Convertirla en torre dejaría a tu rey en jaque.'
         : 'El peón llegó a una casilla azul. Puedes mantenerlo o transformarlo en alfil o caballo.';
 
+  const ranks = flipped ? [1, 2, 3, 4, 5, 6, 7, 8] : [8, 7, 6, 5, 4, 3, 2, 1];
+  const fileOrder = flipped ? [...files].reverse() : files;
+  const topColor = flipped ? 'w' : 'b';
+  const bottomColor = flipped ? 'b' : 'w';
+
+  const renderClock = (color: 'w' | 'b') => {
+    const ms = color === 'w' ? whiteMs : blackMs;
+    const active = !isGameOver && !pendingChoice && turn === color;
+    const low = ms <= 30_000;
+    return (
+      <div className={`rclock ${active ? 'active' : ''} ${low ? 'low' : ''}`} aria-live="polite">
+        {formatClock(ms)}
+      </div>
+    );
+  };
+
+  const renderPlayer = (color: 'w' | 'b') => (
+    <div className="ruser">
+      <span className={`dot ${color === 'w' ? 'white' : 'black'}`} />
+      <span className="uname">{color === 'w' ? 'Blancas' : 'Negras'}</span>
+      <span className="rating">{color === 'w' ? 'local' : 'local'}</span>
+    </div>
+  );
+
   return (
-    <main className="app-shell">
-      <header className="topbar">
-        <div className="brand-lockup" aria-label="Taichess home">
-          <div className="brand-mark" aria-hidden="true">T</div>
-          <div>
-            <div className="brand-name">TAICHESS</div>
-          <div className="brand-caption">AJEDREZ · REGLAS FIDE +</div>
-          </div>
-        </div>
-          <div className="club-stamp"><span className="stamp-dot" /> PARTIDA LOCAL <span>·</span> DOS JUGADORES</div>
+    <main className="site">
+      <header className="site-header">
+        <a className="brand" href="#play" aria-label="TAICHESS">
+          <KnightMark />
+          <span>taichess</span>
+        </a>
+        <nav className="topnav" aria-label="Principal">
+          <a className="active" href="#play">Jugar</a>
+          <a href="#variante">Variante</a>
+        </nav>
+        <div className="header-meta">ajedrez · 10+0 · 2 jugadores</div>
       </header>
 
-      <div className="main-layout">
-        <section className="board-column fade-in" aria-label="Tablero de ajedrez">
-          <div className="intro">
-            <div>
-              <div className="eyebrow">Ajedrez clásico. Nuevas posibilidades.</div>
-              <h1>Haz tu jugada.<br /><span>Cambia el tablero.</span></h1>
-            </div>
-            <div className="board-tag">TABLERO CLÁSICO / 01</div>
+      <div className="round" id="play">
+        <section className="board-column" aria-label="Tablero de ajedrez">
+          <div className="player-strip mobile-only">
+            {renderPlayer(topColor)}
+            {renderClock(topColor)}
           </div>
-          <div className="board-frame">
+          <div className="board-wrap">
             <div className="board-grid" role="grid" aria-label="Tablero TAICHESS">
-              {Array.from({ length: 8 }, (_, row) =>
-                Array.from({ length: 8 }, (_, col) => {
-                  const rank = 8 - row;
-                  const square = `${files[col]}${rank}`;
+              {ranks.map((rank, row) =>
+                fileOrder.map((file, col) => {
+                  const square = `${file}${rank}`;
                   const piece = pieceAt(square);
                   const isLight = (row + col) % 2 === 0;
                   const special = square === 'e4' || square === 'e5';
@@ -118,118 +176,101 @@ function Game() {
                       key={square}
                       type="button"
                       role="gridcell"
-                       aria-label={`${square}${special ? ', casilla de transformación' : ''}${piece ? `, ${piece.color === 'w' ? 'pieza blanca' : 'pieza negra'} ${pieceName[piece.type]}` : ''}`}
+                      aria-label={`${square}${special ? ', casilla de transformación' : ''}${piece ? `, ${piece.color === 'w' ? 'pieza blanca' : 'pieza negra'} ${pieceName[piece.type]}` : ''}`}
                       aria-pressed={selectedSquare === square}
                       data-testid={`square-${square}`}
                       className={squareClasses}
                       onClick={() => onSquareClick(square)}
                     >
-                       {special && <span className="special-label">{square === 'e4' ? 'CAMBIO' : 'CAMBIO'}</span>}
+                      {special && <span className="special-label">T</span>}
                       {piece && <span className={`piece ${piece.color === 'w' ? 'white' : 'black'}`}>{pieceGlyph[piece.type][piece.color]}</span>}
-                      {col === 0 && <span className="rank-label">{rank}</span>}
-                      {row === 7 && <span className="file-label">{files[col]}</span>}
+                      {col === 0 && <span className="coord rank">{rank}</span>}
+                      {row === 7 && <span className="coord file">{file}</span>}
                     </button>
                   );
                 }),
               )}
             </div>
-            <div className="board-foot">
-              <span>e4 / e5 · casillas azules</span>
-              <span>8 × 8 · reglas FIDE</span>
-            </div>
+            {pendingChoice && (
+              <div className="choice-backdrop" role="presentation">
+                <section className="choice-dialog" role="dialog" aria-modal="true" aria-labelledby="choice-heading" data-testid="choice-dialog">
+                  <div className="choice-eyebrow">{pendingChoice.square} · decisión TAICHESS</div>
+                  <h3 id="choice-heading">{choiceTitle}</h3>
+                  <p className="choice-description">{choiceCopy}</p>
+                  <div className="choice-options">
+                    {pendingChoice.choices.map((choice) => (
+                      <button
+                        type="button"
+                        key={choice.piece}
+                        className="choice-option"
+                        data-testid={`choose-${choice.piece}`}
+                        onClick={() => choosePiece(choice.piece)}
+                      >
+                        <span className="choice-piece">{pieceGlyph[choice.piece][choiceColor]}</span>
+                        <span>
+                          <span className="choice-label">{choice.label}</span>
+                          <span className="choice-detail">{choice.detail}</span>
+                        </span>
+                      </button>
+                    ))}
+                  </div>
+                </section>
+              </div>
+            )}
+          </div>
+          <div className="player-strip mobile-only">
+            {renderPlayer(bottomColor)}
+            {renderClock(bottomColor)}
           </div>
         </section>
 
-        <aside className="side-column fade-in delay-1">
-          <section className="status-card" aria-label="Game status">
-            <div className="status-top">
-              <span className="status-kicker">{isGameOver ? 'Partida finalizada' : 'Partida en curso'}</span>
-              <span className="turn-indicator">
-                <span className={`turn-chip ${isWhiteTurn ? 'white-turn' : 'black-turn'}`} />
-                {isGameOver ? 'Posición final' : `Juegan ${turnName.toLowerCase()}`}
-              </span>
-            </div>
-            <h2 className="status-message" data-testid="status-message">{status || (isGameOver ? 'Game over' : `${turnName} to move`)}</h2>
-            <p className="status-sub">
-              {isGameOver
-                ? 'Revisa la posición y comienza otra partida cuando quieras.'
-                : 'Dos personas en el mismo dispositivo. Pasen el turno después de cada jugada.'}
-            </p>
-            <div className="action-row">
-              <div className="turn-name">
-                <small>Turno de</small>
-                {turnName}
-              </div>
-              <button type="button" data-testid="button-new-game" className="new-game" onClick={newGame}>Nueva partida</button>
-            </div>
-          </section>
+        <aside className="table-column">
+          <div className="table-clock desktop-only">{renderClock(topColor)}</div>
+          <div className="table-user desktop-only">{renderPlayer(topColor)}</div>
 
-          <section className="info-panel" aria-labelledby="rules-heading">
-            <div className="panel-heading">
-              <h2 id="rules-heading">Regla TAICHESS</h2>
-              <span className="panel-meta">01 / regla especial</span>
+          <div className="rmoves" data-testid="move-history" aria-labelledby="history-heading">
+            <div className="rmoves-head">
+              <h2 id="history-heading">Jugadas</h2>
+              <span data-testid="history-count">{history.length}</span>
             </div>
-            <div className="rule-card">
-              <div className="rule-symbol" aria-hidden="true">↗</div>
-              <div>
-                <div className="rule-title">Dos casillas. Nuevas estrategias.</div>
-                <div className="rule-copy">
-                  Un peón que llega a <strong>e4</strong> o <strong>e5</strong> puede seguir como peón o transformarse en alfil o caballo. Si esa pieza sale de la zona azul y vuelve a e4 o e5, puedes elegir conservarla o convertirla en torre. El resto sigue las reglas FIDE.
-                </div>
-              </div>
-            </div>
-          </section>
-
-          <section className="history-section fade-in delay-2" aria-labelledby="history-heading">
-            <div className="panel-heading">
-              <h2 id="history-heading">Historial</h2>
-              <span className="panel-meta" data-testid="history-count">{history.length} {history.length === 1 ? 'JUGADA' : 'JUGADAS'}</span>
-            </div>
-            <div className="history-list" data-testid="move-history" aria-live="polite">
+            <div className="rmoves-list">
               {groupedHistory.length === 0 ? (
-                <div className="history-empty">
-                  <div><span>La primera jugada espera</span>Selecciona una pieza y luego su destino.</div>
-                </div>
+                <p className="history-empty">Selecciona una pieza y luego su destino.</p>
               ) : groupedHistory.map((row) => (
                 <div className="move-row" key={row.number} data-testid={`move-row-${row.number}`}>
-                  <span className="move-number">{String(row.number).padStart(2, '0')}.</span>
+                  <span className="move-number">{row.number}</span>
                   <span className="move-san">{row.white?.san ?? '—'}</span>
-                  <span className="move-san" style={{ textAlign: 'right' }}>{row.black?.san ?? ''}</span>
-                  {(row.white?.note || row.black?.note) && <span className="move-note">{row.white?.note || row.black?.note}</span>}
+                  <span className="move-san">{row.black?.san ?? ''}</span>
                 </div>
               ))}
             </div>
+          </div>
+
+          <div className="rcontrols">
+            <p className="status-message" data-testid="status-message">
+              {status || (isGameOver ? 'Partida terminada' : `Juegan ${turnName.toLowerCase()}`)}
+            </p>
+            <div className="rcontrols-buttons">
+              <button type="button" data-testid="button-new-game" className="btn-primary" onClick={startNewGame}>
+                Nueva partida
+              </button>
+              <button type="button" className="btn-ghost" onClick={() => setFlipped((value) => !value)}>
+                Girar tablero
+              </button>
+            </div>
+          </div>
+
+          <div className="table-user desktop-only">{renderPlayer(bottomColor)}</div>
+          <div className="table-clock desktop-only">{renderClock(bottomColor)}</div>
+
+          <section className="variant-card" id="variante" aria-labelledby="rules-heading">
+            <h2 id="rules-heading">Variante TAICHESS</h2>
+            <p>
+              Mismas reglas FIDE, con una excepción: un peón que llega a <strong>e4</strong> o <strong>e5</strong> puede seguir como peón o transformarse en alfil o caballo. Si esa pieza sale y vuelve a esas casillas, puedes conservarla o convertirla en torre.
+            </p>
           </section>
         </aside>
       </div>
-
-      {pendingChoice && (
-        <div className="choice-backdrop" role="presentation">
-          <section className="choice-dialog" role="dialog" aria-modal="true" aria-labelledby="choice-heading" data-testid="choice-dialog">
-            <div className="choice-eyebrow">{pendingChoice.square} / decisión TAICHESS</div>
-            <h3 id="choice-heading">{choiceTitle}</h3>
-            <p className="choice-description">{choiceCopy}</p>
-            <div className="choice-options">
-              {pendingChoice.choices.map((choice) => (
-                <button
-                  type="button"
-                  key={choice.piece}
-                  className="choice-option"
-                  data-testid={`choose-${choice.piece}`}
-                  onClick={() => choosePiece(choice.piece)}
-                >
-                  <span className="choice-piece">{pieceGlyph[choice.piece][choiceColor]}</span>
-                  <span>
-                    <span className="choice-label">{choice.label}</span>
-                    <span className="choice-detail">{choice.detail}</span>
-                  </span>
-                  <span className="choice-arrow" aria-hidden="true">›</span>
-                </button>
-              ))}
-            </div>
-          </section>
-        </div>
-      )}
     </main>
   );
 }
