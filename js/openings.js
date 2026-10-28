@@ -1,0 +1,117 @@
+/**
+ * openings.js — Opening name lookup by ECO / move sequence
+ */
+const Openings = (() => {
+  // Key: space-joined SAN moves (first N moves), Value: opening name
+  const DB = {
+    // ── King's Pawn ──────────────────────────────────────────────
+    'e4':                     'King\'s Pawn Opening',
+    'e4 e5':                  'Open Game',
+    'e4 e5 Nf3':              'King\'s Knight Opening',
+    'e4 e5 Nf3 Nc6':          'Three Knights / Double King Pawn',
+    'e4 e5 Nf3 Nc6 Bb5':      'Ruy López (Spanish Opening)',
+    'e4 e5 Nf3 Nc6 Bb5 a6':   'Ruy López: Morphy Defence',
+    'e4 e5 Nf3 Nc6 Bc4':      'Italian Opening',
+    'e4 e5 Nf3 Nc6 Bc4 Bc5':  'Giuoco Piano',
+    'e4 e5 Nf3 Nc6 Bc4 Nf6':  'Two Knights Defence',
+    'e4 e5 Nf3 Nc6 d4':       'Scotch Opening',
+    'e4 e5 Nf3 Nc6 d4 exd4 Nxd4': 'Scotch Game',
+    'e4 e5 Nf3 Nf6':          'Petrov\'s Defence',
+    'e4 e5 Nf3 f5':           'Latvian Gambit',
+    'e4 e5 f4':               'King\'s Gambit',
+    'e4 e5 f4 exf4':          'King\'s Gambit Accepted',
+    'e4 e5 f4 Bc5':           'King\'s Gambit Declined',
+    'e4 e5 Nc3':              'Vienna Game',
+    'e4 e5 Nc3 Nc6':          'Vienna Game: Main Line',
+    'e4 e5 d4':               'Center Game',
+    'e4 e5 d4 exd4':          'Center Game Accepted',
+    'e4 e6':                  'French Defence',
+    'e4 e6 d4':               'French Defence: Main Line',
+    'e4 e6 d4 d5':            'French Defence: Classical',
+    'e4 e6 d4 d5 e5':         'French Defence: Advance Variation',
+    'e4 e6 d4 d5 Nc3':        'French Defence: Winawer / Classical',
+    'e4 e6 d4 d5 Nc3 Bb4':    'French Defence: Winawer Variation',
+    'e4 e6 d4 d5 Nd2':        'French Defence: Tarrasch',
+    'e4 c5':                  'Sicilian Defence',
+    'e4 c5 Nf3':              'Sicilian Defence: Open',
+    'e4 c5 Nf3 d6':           'Sicilian: Najdorf (prep)',
+    'e4 c5 Nf3 d6 d4':        'Sicilian: Open (d6)',
+    'e4 c5 Nf3 d6 d4 cxd4 Nxd4 Nf6 Nc3 a6': 'Sicilian: Najdorf Variation',
+    'e4 c5 Nf3 Nc6':          'Sicilian: Classical',
+    'e4 c5 Nf3 Nc6 d4':       'Sicilian: Open (Nc6)',
+    'e4 c5 Nf3 e6':           'Sicilian: Kan / Paulsen',
+    'e4 c5 c3':               'Sicilian: Alapin Variation',
+    'e4 c5 Nc3':              'Sicilian: Closed',
+    'e4 c5 f4':               'Sicilian: Grand Prix Attack',
+    'e4 c6':                  'Caro-Kann Defence',
+    'e4 c6 d4':               'Caro-Kann: Main Line',
+    'e4 c6 d4 d5':            'Caro-Kann: Classical',
+    'e4 c6 d4 d5 e5':         'Caro-Kann: Advance Variation',
+    'e4 c6 d4 d5 Nc3':        'Caro-Kann: Classical/Karpov',
+    'e4 d5':                  'Scandinavian Defence',
+    'e4 d5 exd5':             'Scandinavian: Main Line',
+    'e4 d5 exd5 Qxd5':        'Scandinavian: Modern Variation',
+    'e4 d6':                  'Pirc Defence',
+    'e4 d6 d4 Nf6':           'Pirc Defence: Main Line',
+    'e4 g6':                  'Modern Defence',
+    'e4 Nf6':                 'Alekhine\'s Defence',
+    'e4 Nf6 e5':              'Alekhine\'s Defence: Main Line',
+    // ── Queen's Pawn ─────────────────────────────────────────────
+    'd4':                     'Queen\'s Pawn Opening',
+    'd4 d5':                  'Closed Game',
+    'd4 d5 c4':               'Queen\'s Gambit',
+    'd4 d5 c4 e6':            'Queen\'s Gambit Declined',
+    'd4 d5 c4 e6 Nc3':        'QGD: Main Line',
+    'd4 d5 c4 e6 Nc3 Nf6 Bg5': 'QGD: Classical',
+    'd4 d5 c4 dxc4':          'Queen\'s Gambit Accepted',
+    'd4 d5 c4 c6':            'Slav Defence',
+    'd4 d5 c4 c6 Nf3 Nf6':   'Slav: Main Line',
+    'd4 d5 Nf3':              'London System (d5)',
+    'd4 Nf6':                 'Indian Defence',
+    'd4 Nf6 c4':              'Queen\'s Indian / King\'s Indian setup',
+    'd4 Nf6 c4 e6':           'Nimzo / Queen\'s Indian setup',
+    'd4 Nf6 c4 e6 Nc3 Bb4':  'Nimzo-Indian Defence',
+    'd4 Nf6 c4 e6 Nf3':      'Queen\'s Indian Defence (prep)',
+    'd4 Nf6 c4 e6 Nf3 b6':   'Queen\'s Indian Defence',
+    'd4 Nf6 c4 g6':           'King\'s Indian Defence',
+    'd4 Nf6 c4 g6 Nc3 Bg7':  'King\'s Indian: Main Line',
+    'd4 Nf6 c4 g6 Nc3 Bg7 e4': 'King\'s Indian: Classical',
+    'd4 Nf6 Nf3':             'London System (Nf6)',
+    'd4 Nf6 Nf3 d5':         'London System',
+    'd4 Nf6 Nf3 d5 Bf4':     'London System: Main Line',
+    'd4 Nf6 c4 c5':          'Benoni Defence',
+    'd4 Nf6 c4 c5 d5':       'Benoni: Main Line',
+    'd4 f5':                  'Dutch Defence',
+    'd4 f5 c4':               'Dutch Defence: Main Line',
+    'd4 f5 g3':               'Dutch: Leningrad setup',
+    // ── Flank Openings ───────────────────────────────────────────
+    'c4':                     'English Opening',
+    'c4 e5':                  'English: Reversed Sicilian',
+    'c4 Nf6':                 'English: King\'s Indian',
+    'c4 c5':                  'English: Symmetrical',
+    'c4 e6':                  'English: Agincourt',
+    'Nf3':                    'Réti Opening',
+    'Nf3 d5':                 'Réti: Main Line',
+    'Nf3 d5 c4':              'Réti Gambit',
+    'Nf3 Nf6':                'Réti: Double Fianchetto setup',
+    'g3':                     'King\'s Fianchetto Opening',
+    'b3':                     'Nimzo-Larsen Attack',
+    'b4':                     'Polish Opening',
+    'f4':                     'Bird\'s Opening',
+    'f4 e5':                  'Bird\'s: From Gambit',
+    'Nc3':                    'Van Geet Opening',
+    'd4 d5 c4 e6 Nc3 Nf6 Nf3': 'QGD: Three Knights',
+    'e4 e5 Nf3 Nc6 Bb5 Nf6': 'Ruy López: Berlin Defence',
+  };
+
+  function lookup(sanMoves) {
+    // Try longest match first
+    for (let len=sanMoves.length; len>0; len--) {
+      const key = sanMoves.slice(0,len).join(' ');
+      if (DB[key]) return DB[key];
+    }
+    return '';
+  }
+
+  return { lookup };
+})();

@@ -1,0 +1,242 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>T-AICHESS — Play Chess Online</title>
+  <meta name="description" content="T-AICHESS: Play chess online against AI or a friend. Lichess-inspired interface.">
+  <link rel="icon" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'><text y='.9em' font-size='90'>♟</text></svg>">
+  <link rel="stylesheet" href="css/style.css">
+</head>
+<body class="theme-dark">
+
+  <!-- TOP NAV -->
+  <header class="topnav">
+    <div class="topnav__logo">
+      <span class="logo-icon">♟</span>
+      <span class="logo-text">T-AICHESS</span>
+    </div>
+    <nav class="topnav__links">
+      <a href="#" class="nav-link active" data-view="play">Play</a>
+      <a href="#" class="nav-link" data-view="analysis">Analysis</a>
+      <a href="#" class="nav-link" data-view="learn">Learn</a>
+    </nav>
+    <div class="topnav__right">
+      <button class="btn-icon" id="toggleTheme" title="Toggle theme" aria-label="Toggle dark/light theme">☀</button>
+      <button class="btn-icon" id="toggleSound" title="Toggle sound" aria-label="Toggle sound">🔊</button>
+    </div>
+  </header>
+
+  <!-- MAIN LAYOUT -->
+  <main class="layout" id="appMain">
+
+    <!-- LEFT PANEL: game controls -->
+    <aside class="panel panel--left" id="leftPanel">
+      <div class="game-setup" id="gameSetup">
+        <h2 class="panel-title">New Game</h2>
+
+        <div class="setup-section">
+          <label class="setup-label">Time Control</label>
+          <div class="time-grid">
+            <button class="time-btn active" data-minutes="1" data-increment="0">1+0<span>Bullet</span></button>
+            <button class="time-btn" data-minutes="2" data-increment="1">2+1<span>Bullet</span></button>
+            <button class="time-btn" data-minutes="3" data-increment="0">3+0<span>Blitz</span></button>
+            <button class="time-btn" data-minutes="3" data-increment="2">3+2<span>Blitz</span></button>
+            <button class="time-btn" data-minutes="5" data-increment="0">5+0<span>Blitz</span></button>
+            <button class="time-btn" data-minutes="5" data-increment="3">5+3<span>Blitz</span></button>
+            <button class="time-btn" data-minutes="10" data-increment="0">10+0<span>Rapid</span></button>
+            <button class="time-btn" data-minutes="10" data-increment="5">10+5<span>Rapid</span></button>
+            <button class="time-btn" data-minutes="15" data-increment="10">15+10<span>Rapid</span></button>
+            <button class="time-btn" data-minutes="30" data-increment="0">30+0<span>Classical</span></button>
+            <button class="time-btn" data-minutes="0" data-increment="0">∞<span>No limit</span></button>
+          </div>
+        </div>
+
+        <div class="setup-section">
+          <label class="setup-label">Color</label>
+          <div class="color-choice">
+            <button class="color-btn active" data-color="white" title="Play as White">♔</button>
+            <button class="color-btn" data-color="random" title="Random color">⚄</button>
+            <button class="color-btn" data-color="black" title="Play as Black">♚</button>
+          </div>
+        </div>
+
+        <div class="setup-section">
+          <label class="setup-label">Opponent</label>
+          <div class="opponent-choice">
+            <button class="opp-btn active" data-opp="ai">vs Computer</button>
+            <button class="opp-btn" data-opp="friend">vs Friend</button>
+          </div>
+        </div>
+
+        <div class="setup-section ai-section" id="aiSection">
+          <label class="setup-label">AI Strength</label>
+          <div class="ai-levels">
+            <button class="level-btn active" data-level="1">1<span>Beginner</span></button>
+            <button class="level-btn" data-level="2">2</button>
+            <button class="level-btn" data-level="3">3</button>
+            <button class="level-btn" data-level="4">4</button>
+            <button class="level-btn" data-level="5">5</button>
+            <button class="level-btn" data-level="6">6</button>
+            <button class="level-btn" data-level="7">7</button>
+            <button class="level-btn" data-level="8">8<span>Master</span></button>
+          </div>
+        </div>
+
+        <button class="btn-start" id="startGame">▶ Start Game</button>
+      </div>
+
+      <!-- In-game info (hidden initially) -->
+      <div class="game-info hidden" id="gameInfo">
+        <div class="player-info" id="playerTop">
+          <div class="player-avatar" id="topAvatar">♚</div>
+          <div class="player-details">
+            <span class="player-name" id="topName">Opponent</span>
+            <span class="player-rating" id="topRating">1500</span>
+          </div>
+          <div class="clock clock--opponent" id="clockTop">
+            <span class="clock-time" id="clockTopTime">10:00</span>
+          </div>
+        </div>
+
+        <div class="captured-row" id="capturedTop"></div>
+
+        <div class="eval-bar-wrap">
+          <div class="eval-bar" id="evalBar">
+            <div class="eval-fill" id="evalFill"></div>
+          </div>
+          <span class="eval-text" id="evalText">0.0</span>
+        </div>
+
+        <div class="captured-row" id="capturedBottom"></div>
+
+        <div class="player-info" id="playerBottom">
+          <div class="player-avatar" id="bottomAvatar">♔</div>
+          <div class="player-details">
+            <span class="player-name" id="bottomName">You</span>
+            <span class="player-rating" id="bottomRating">1500</span>
+          </div>
+          <div class="clock clock--self" id="clockBottom">
+            <span class="clock-time" id="clockBottomTime">10:00</span>
+          </div>
+        </div>
+
+        <div class="game-actions">
+          <button class="action-btn" id="btnResign" title="Resign">⚑ Resign</button>
+          <button class="action-btn" id="btnDraw" title="Offer Draw">½ Draw</button>
+          <button class="action-btn" id="btnFlip" title="Flip board">⇅ Flip</button>
+          <button class="action-btn" id="btnNewGame" title="New game">↺ New</button>
+        </div>
+      </div>
+    </aside>
+
+    <!-- CENTER: board -->
+    <section class="board-section">
+      <div class="board-wrap" id="boardWrap">
+        <div class="board-coords board-coords--files" id="filesTop"></div>
+        <div class="board-coords board-coords--ranks" id="ranksLeft"></div>
+        <div class="board" id="chessboard" role="grid" aria-label="Chess board"></div>
+        <div class="board-coords board-coords--ranks board-coords--ranks-right" id="ranksRight"></div>
+        <div class="board-coords board-coords--files" id="filesBottom"></div>
+
+        <!-- Promotion modal -->
+        <div class="promotion-modal hidden" id="promotionModal">
+          <div class="promotion-title">Promote pawn</div>
+          <div class="promotion-pieces" id="promotionPieces"></div>
+        </div>
+
+        <!-- Game result overlay -->
+        <div class="result-overlay hidden" id="resultOverlay">
+          <div class="result-box">
+            <div class="result-icon" id="resultIcon">♔</div>
+            <div class="result-title" id="resultTitle">Game Over</div>
+            <div class="result-sub" id="resultSub"></div>
+            <div class="result-actions">
+              <button class="btn-start" id="resultNewGame">New Game</button>
+              <button class="btn-secondary" id="resultAnalyze">Analyze</button>
+            </div>
+          </div>
+        </div>
+      </div>
+    </section>
+
+    <!-- RIGHT PANEL: move list & chat -->
+    <aside class="panel panel--right" id="rightPanel">
+
+      <!-- Tabs -->
+      <div class="panel-tabs">
+        <button class="tab-btn active" data-tab="moves">Moves</button>
+        <button class="tab-btn" data-tab="chat">Chat</button>
+        <button class="tab-btn" data-tab="analysis">Analysis</button>
+      </div>
+
+      <!-- Move list -->
+      <div class="tab-content active" id="tabMoves">
+        <div class="move-list" id="moveList" role="log" aria-label="Move history"></div>
+        <div class="move-nav">
+          <button class="nav-btn" id="navFirst" title="First move">⏮</button>
+          <button class="nav-btn" id="navPrev" title="Previous move">◀</button>
+          <button class="nav-btn" id="navNext" title="Next move">▶</button>
+          <button class="nav-btn" id="navLast" title="Last move">⏭</button>
+        </div>
+      </div>
+
+      <!-- Chat -->
+      <div class="tab-content" id="tabChat">
+        <div class="chat-log" id="chatLog">
+          <div class="chat-msg chat-msg--system">Welcome to T-AICHESS! Good luck and have fun.</div>
+        </div>
+        <div class="chat-input-wrap">
+          <input type="text" class="chat-input" id="chatInput" placeholder="Say something..." maxlength="140">
+          <button class="chat-send" id="chatSend">Send</button>
+        </div>
+      </div>
+
+      <!-- Analysis -->
+      <div class="tab-content" id="tabAnalysis">
+        <div class="analysis-info">
+          <div class="analysis-row">
+            <span class="analysis-label">Best move</span>
+            <span class="analysis-val" id="analysisBestMove">—</span>
+          </div>
+          <div class="analysis-row">
+            <span class="analysis-label">Evaluation</span>
+            <span class="analysis-val" id="analysisEval">—</span>
+          </div>
+          <div class="analysis-row">
+            <span class="analysis-label">Depth</span>
+            <span class="analysis-val" id="analysisDepth">—</span>
+          </div>
+          <div class="analysis-row">
+            <span class="analysis-label">Move quality</span>
+            <span class="analysis-val" id="analysisMoveQuality">—</span>
+          </div>
+        </div>
+        <div class="pv-line" id="pvLine"></div>
+      </div>
+
+      <!-- Opening name -->
+      <div class="opening-name" id="openingName"></div>
+
+      <!-- FEN / PGN export -->
+      <div class="export-section">
+        <button class="export-btn" id="copyFen">Copy FEN</button>
+        <button class="export-btn" id="copyPgn">Copy PGN</button>
+      </div>
+    </aside>
+
+  </main>
+
+  <!-- STATUS BAR -->
+  <div class="status-bar" id="statusBar">
+    <span id="statusText">Select time control and press Start</span>
+    <span id="turnIndicator" class="turn-indicator"></span>
+  </div>
+
+  <script src="js/chess.js"></script>
+  <script src="js/engine.js"></script>
+  <script src="js/openings.js"></script>
+  <script src="js/board.js"></script>
+  <script src="js/app.js"></script>
+</body>
+</html>
