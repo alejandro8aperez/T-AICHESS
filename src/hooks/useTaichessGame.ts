@@ -242,8 +242,11 @@ export function useTaichessGame() {
       const targetPiece = game.get(to);
       const isCapture = Boolean(targetPiece);
 
-      const returnedToBlueSquare =
-        trackedPiece !== undefined &&
+      const isBishopOrKnight =
+        movingPiece.type === "b" || movingPiece.type === "n";
+
+      const arrivedAtBlueSquare =
+        isBishopOrKnight &&
         !BLUE_SQUARES.has(from) &&
         BLUE_SQUARES.has(to);
 
@@ -257,9 +260,6 @@ export function useTaichessGame() {
         committedMove.isEnPassant() ? (`${to[0]}${from[1]}` as Square) : to;
       trackedPiecesRef.current.delete(capturedSquare);
       trackedPiecesRef.current.delete(from);
-      if (trackedPiece) {
-        trackedPiecesRef.current.set(to, trackedPiece);
-      }
 
       setSelectedSquare(null);
       setLastMove({ from, to });
@@ -293,12 +293,12 @@ export function useTaichessGame() {
         });
       }
 
-      if (returnedToBlueSquare && trackedPiece) {
+      if (arrivedAtBlueSquare) {
         const choices = returnTransformChoices(
           game,
           to,
           mover,
-          trackedPiece.type,
+          movingPiece.type as "b" | "n",
         );
         pendingMoveRef.current = {
           from,
@@ -335,33 +335,31 @@ export function useTaichessGame() {
 
       const game = gameRef.current;
       if (pending.reason === "return-transform") {
-        const trackedPiece = trackedPiecesRef.current.get(pending.to);
-        if (trackedPiece && (piece === "r" || piece === trackedPiece.type)) {
-          if (
-            piece === "r" &&
-            transformationIsSafe(game, pending.to, pending.mover, "r")
-          ) {
-            game.remove(pending.to);
-            game.put({ type: "r", color: pending.mover }, pending.to);
-            trackedPiecesRef.current.delete(pending.to);
-            sounds.playTransform();
-            setHistory((current) =>
-              current.map((entry, index) =>
-                index === current.length - 1
-                  ? { ...entry, note: "TAICHESS · se convirtió en torre" }
-                  : entry,
-              ),
-            );
-          } else if (piece === trackedPiece.type) {
-            const currentName = piece === "b" ? "alfil" : "caballo";
-            setHistory((current) =>
-              current.map((entry, index) =>
-                index === current.length - 1
-                  ? { ...entry, note: `TAICHESS · se mantiene como ${currentName}` }
-                  : entry,
-              ),
-            );
-          }
+        const pieceOnSquare = game.get(pending.to);
+        const currentType = (pieceOnSquare?.type === "b" || pieceOnSquare?.type === "n")
+          ? pieceOnSquare.type
+          : (pending.choices.find((c) => c.piece !== "r")?.piece as "b" | "n" || "b");
+
+        if (piece === "r" && transformationIsSafe(game, pending.to, pending.mover, "r")) {
+          game.remove(pending.to);
+          game.put({ type: "r", color: pending.mover }, pending.to);
+          sounds.playTransform();
+          setHistory((current) =>
+            current.map((entry, index) =>
+              index === current.length - 1
+                ? { ...entry, note: "TAICHESS · se convirtió en torre" }
+                : entry,
+            ),
+          );
+        } else if (piece === currentType) {
+          const currentName = piece === "b" ? "alfil" : "caballo";
+          setHistory((current) =>
+            current.map((entry, index) =>
+              index === current.length - 1
+                ? { ...entry, note: `TAICHESS · se mantiene como ${currentName}` }
+                : entry,
+            ),
+          );
         }
         pendingMoveRef.current = null;
         setPendingChoice(null);

@@ -70,8 +70,8 @@ export function evaluateBoard(game: Chess, trackedPieces: Map<Square, { color: C
       let taichessBonus = 0;
       if (sq === 'e4' || sq === 'e5') {
         if (piece.type === 'p') {
-          taichessBonus = 120; // High incentive to reach e4/e5
-        } else if (trackedPieces.has(sq)) {
+          taichessBonus = 120; // High incentive for pawn to reach e4/e5
+        } else if (piece.type === 'b' || piece.type === 'n') {
           taichessBonus = 180; // Potential upgrade into rook
         }
       }
