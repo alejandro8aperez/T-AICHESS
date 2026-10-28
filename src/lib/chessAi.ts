@@ -66,7 +66,6 @@ export function evaluateBoard(game: Chess, trackedPieces: Map<Square, { color: C
         positional = KNIGHT_TABLE[squareToIndex(sq, piece.color)];
       }
 
-      // TAICHESS bonus: Pieces occupying or controlling e4/e5 have tactical upgrade advantage!
       let taichessBonus = 0;
       if (sq === 'e4' || sq === 'e5') {
         if (piece.type === 'p') {
@@ -93,7 +92,19 @@ export function getAiBestMove(
     const legalMoves = game.moves({ verbose: true });
     if (!legalMoves || legalMoves.length === 0) return null;
 
-    // Easy mode: prioritizes captures 50% of the time, else random move
+    // Variety in opening moves: if moves <= 4, pick randomly among top central/good moves
+    const moveCount = game.history().length;
+    if (moveCount < 3 && Math.random() < 0.75) {
+      // Good opening moves
+      const goodOpenings = legalMoves.filter((m) =>
+        ['e4', 'd4', 'c4', 'Nf3', 'e5', 'd5', 'c5', 'Nf6', 'Nc6', 'Nc3'].some((s) => m.san.startsWith(s))
+      );
+      if (goodOpenings.length > 0) {
+        const pick = goodOpenings[Math.floor(Math.random() * goodOpenings.length)];
+        return { from: pick.from as Square, to: pick.to as Square, promotion: pick.promotion };
+      }
+    }
+
     if (difficulty === 'easy') {
       const captures = legalMoves.filter((m) => m.captured);
       if (captures.length > 0 && Math.random() < 0.5) {
@@ -105,53 +116,43 @@ export function getAiBestMove(
     }
 
     const isMaximizing = game.turn() === 'w';
-    // Depth 1 for medium (fast, responsive), Depth 2 with max limit for hard
     const maxDepth = difficulty === 'hard' ? 2 : 1;
 
-    let bestMove = legalMoves[0];
-    let bestScore = isMaximizing ? -Infinity : Infinity;
+    // Shuffle moves first so equally scored moves create different games!
+    const shuffledMoves = [...legalMoves].sort(() => Math.random() - 0.5);
 
-    // Sort moves: Captures and central/e4/e5 moves first for alpha-beta efficiency
-    const sortedMoves = [...legalMoves].sort((a, b) => {
-      let scoreA = a.captured ? 10 : 0;
-      let scoreB = b.captured ? 10 : 0;
-      if (a.to === 'e4' || a.to === 'e5') scoreA += 5;
-      if (b.to === 'e4' || b.to === 'e5') scoreB += 5;
-      return scoreB - scoreA;
-    });
+    const scoredMoves: { move: typeof legalMoves[0]; score: number }[] = [];
 
-    for (const move of sortedMoves) {
+    for (const move of shuffledMoves) {
       const tempGame = new Chess(game.fen());
       tempGame.move({ from: move.from, to: move.to, promotion: move.promotion || 'q' });
 
-      const score = maxDepth === 1
+      // Add a small random jitter (+-4 points) to prevent robotic repetitive games
+      const jitter = (Math.random() - 0.5) * 8;
+      const score = (maxDepth === 1
         ? evaluateBoard(tempGame, trackedPieces)
-        : evaluateMinimax(tempGame, trackedPieces, 1, -Infinity, Infinity, !isMaximizing);
+        : evaluateMinimax(tempGame, trackedPieces, 1, -Infinity, Infinity, !isMaximizing)) + jitter;
 
-      if (isMaximizing) {
-        if (score > bestScore) {
-          bestScore = score;
-          bestMove = move;
-        }
-      } else {
-        if (score < bestScore) {
-          bestScore = score;
-          bestMove = move;
-        }
-      }
+      scoredMoves.push({ move, score });
     }
 
+    // Sort by best score
+    scoredMoves.sort((a, b) => isMaximizing ? b.score - a.score : a.score - b.score);
+
+    // Pick among the top 2-3 best moves for realistic variety
+    const topCandidates = scoredMoves.slice(0, Math.min(3, scoredMoves.length));
+    const chosen = topCandidates[Math.floor(Math.random() * topCandidates.length)].move;
+
     return {
-      from: bestMove.from as Square,
-      to: bestMove.to as Square,
-      promotion: (bestMove.promotion as PieceSymbol) || 'q',
+      from: chosen.from as Square,
+      to: chosen.to as Square,
+      promotion: (chosen.promotion as PieceSymbol) || 'q',
     };
   } catch (err) {
     console.error('Error generating AI move:', err);
-    // Fallback: pick any legal move
     const moves = game.moves({ verbose: true });
     if (moves.length > 0) {
-      const fallback = moves[0];
+      const fallback = moves[Math.floor(Math.random() * moves.length)];
       return { from: fallback.from as Square, to: fallback.to as Square, promotion: fallback.promotion };
     }
     return null;
@@ -171,7 +172,6 @@ function evaluateMinimax(
   }
 
   const moves = game.moves({ verbose: true });
-  // Limit branching factor to keep computation light and instantaneous (<50ms)
   const candidateMoves = moves.slice(0, 18);
 
   if (isMaximizing) {

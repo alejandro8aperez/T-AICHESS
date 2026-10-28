@@ -399,15 +399,26 @@ function Game() {
               <button type="button" data-testid="button-new-game" className="btn-primary" onClick={startNewGame}>
                 + Nueva
               </button>
-              <button
-                type="button"
-                className="btn-ghost"
-                disabled={!canUndo}
-                onClick={undoMove}
-                title="Deshacer jugada"
-              >
-                ↩ Deshacer
-              </button>
+              {gameMode === 'ai-vs-ai' ? (
+                <button
+                  type="button"
+                  className={`btn-ghost ${isAiVsAiPaused ? 'btn-active' : ''}`}
+                  onClick={() => setIsAiVsAiPaused(!isAiVsAiPaused)}
+                  title={isAiVsAiPaused ? 'Reanudar PC vs PC' : 'Detener temporalmente PC vs PC'}
+                >
+                  {isAiVsAiPaused ? '▶ Reanudar' : '⏹ Stop'}
+                </button>
+              ) : (
+                <button
+                  type="button"
+                  className="btn-ghost"
+                  disabled={!canUndo}
+                  onClick={undoMove}
+                  title="Deshacer jugada"
+                >
+                  ↩ Deshacer
+                </button>
+              )}
               <button type="button" className="btn-ghost" onClick={() => setFlipped((value) => !value)}>
                 ↻ Girar
               </button>
