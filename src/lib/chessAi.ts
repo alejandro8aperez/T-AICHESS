@@ -11,7 +11,6 @@ const PIECE_VALUES: Record<PieceSymbol, number> = {
   k: 20000,
 };
 
-// Positional bonuses for pieces
 const PAWN_TABLE = [
   0,  0,  0,  0,  0,  0,  0,  0,
   50, 50, 50, 50, 50, 50, 50, 50,
@@ -38,12 +37,9 @@ function squareToIndex(sq: Square, color: Color): number {
   const file = sq.charCodeAt(0) - 97;
   const rank = parseInt(sq[1], 10) - 1;
   const row = color === 'w' ? 7 - rank : rank;
-  return row * 8 + file;
+  return Math.min(63, Math.max(0, row * 8 + file));
 }
 
-/**
- * Evaluates board taking into consideration TAICHESS special squares (e4, e5)
- */
 export function evaluateBoard(game: Chess, trackedPieces: Map<Square, { color: Color; type: 'b' | 'n' }>): number {
   if (game.isCheckmate()) {
     return game.turn() === 'w' ? -99999 : 99999;
@@ -74,9 +70,9 @@ export function evaluateBoard(game: Chess, trackedPieces: Map<Square, { color: C
       let taichessBonus = 0;
       if (sq === 'e4' || sq === 'e5') {
         if (piece.type === 'p') {
-          taichessBonus = 120; // High incentive to reach e4/e5 for transformation
+          taichessBonus = 120; // High incentive to reach e4/e5
         } else if (trackedPieces.has(sq)) {
-          taichessBonus = 180; // Potential upgrade into rook!
+          taichessBonus = 180; // Potential upgrade into rook
         }
       }
 
@@ -93,69 +89,76 @@ export function getAiBestMove(
   trackedPieces: Map<Square, { color: Color; type: 'b' | 'n' }>,
   difficulty: Difficulty
 ): { from: Square; to: Square; promotion?: PieceSymbol } | null {
-  const legalMoves = game.moves({ verbose: true });
-  if (legalMoves.length === 0) return null;
+  try {
+    const legalMoves = game.moves({ verbose: true });
+    if (!legalMoves || legalMoves.length === 0) return null;
 
-  // Easy: random or simple captures
-  if (difficulty === 'easy') {
-    const captures = legalMoves.filter((m) => m.captured);
-    if (captures.length > 0 && Math.random() < 0.6) {
-      const move = captures[Math.floor(Math.random() * captures.length)];
+    // Easy mode: prioritizes captures 50% of the time, else random move
+    if (difficulty === 'easy') {
+      const captures = legalMoves.filter((m) => m.captured);
+      if (captures.length > 0 && Math.random() < 0.5) {
+        const move = captures[Math.floor(Math.random() * captures.length)];
+        return { from: move.from as Square, to: move.to as Square, promotion: move.promotion };
+      }
+      const move = legalMoves[Math.floor(Math.random() * legalMoves.length)];
       return { from: move.from as Square, to: move.to as Square, promotion: move.promotion };
     }
-    const move = legalMoves[Math.floor(Math.random() * legalMoves.length)];
-    return { from: move.from as Square, to: move.to as Square, promotion: move.promotion };
-  }
 
-  // Medium (depth 1-2 evaluation with minimax/heuristics)
-  // Hard (depth 3 minimax with alpha-beta pruning)
-  const isMaximizing = game.turn() === 'w';
-  const targetDepth = difficulty === 'hard' ? 3 : 2;
+    const isMaximizing = game.turn() === 'w';
+    // Depth 1 for medium (fast, responsive), Depth 2 with max limit for hard
+    const maxDepth = difficulty === 'hard' ? 2 : 1;
 
-  let bestMove = legalMoves[0];
-  let bestScore = isMaximizing ? -Infinity : Infinity;
+    let bestMove = legalMoves[0];
+    let bestScore = isMaximizing ? -Infinity : Infinity;
 
-  // Shuffle moves first for variety among equally scored moves
-  const shuffled = [...legalMoves].sort(() => Math.random() - 0.5);
+    // Sort moves: Captures and central/e4/e5 moves first for alpha-beta efficiency
+    const sortedMoves = [...legalMoves].sort((a, b) => {
+      let scoreA = a.captured ? 10 : 0;
+      let scoreB = b.captured ? 10 : 0;
+      if (a.to === 'e4' || a.to === 'e5') scoreA += 5;
+      if (b.to === 'e4' || b.to === 'e5') scoreB += 5;
+      return scoreB - scoreA;
+    });
 
-  for (const move of shuffled) {
-    const tempGame = new Chess(game.fen());
-    tempGame.move({ from: move.from, to: move.to, promotion: move.promotion || 'q' });
+    for (const move of sortedMoves) {
+      const tempGame = new Chess(game.fen());
+      tempGame.move({ from: move.from, to: move.to, promotion: move.promotion || 'q' });
 
-    // Track simulated state
-    const tempTracked = new Map(trackedPieces);
-    if (move.captured) {
-      tempTracked.delete(move.to as Square);
-    }
-    const tr = tempTracked.get(move.from as Square);
-    if (tr) {
-      tempTracked.delete(move.from as Square);
-      tempTracked.set(move.to as Square, tr);
-    }
+      const score = maxDepth === 1
+        ? evaluateBoard(tempGame, trackedPieces)
+        : evaluateMinimax(tempGame, trackedPieces, 1, -Infinity, Infinity, !isMaximizing);
 
-    const score = minimax(tempGame, tempTracked, targetDepth - 1, -Infinity, Infinity, !isMaximizing);
-
-    if (isMaximizing) {
-      if (score > bestScore) {
-        bestScore = score;
-        bestMove = move;
-      }
-    } else {
-      if (score < bestScore) {
-        bestScore = score;
-        bestMove = move;
+      if (isMaximizing) {
+        if (score > bestScore) {
+          bestScore = score;
+          bestMove = move;
+        }
+      } else {
+        if (score < bestScore) {
+          bestScore = score;
+          bestMove = move;
+        }
       }
     }
-  }
 
-  return {
-    from: bestMove.from as Square,
-    to: bestMove.to as Square,
-    promotion: (bestMove.promotion as PieceSymbol) || 'q',
-  };
+    return {
+      from: bestMove.from as Square,
+      to: bestMove.to as Square,
+      promotion: (bestMove.promotion as PieceSymbol) || 'q',
+    };
+  } catch (err) {
+    console.error('Error generating AI move:', err);
+    // Fallback: pick any legal move
+    const moves = game.moves({ verbose: true });
+    if (moves.length > 0) {
+      const fallback = moves[0];
+      return { from: fallback.from as Square, to: fallback.to as Square, promotion: fallback.promotion };
+    }
+    return null;
+  }
 }
 
-function minimax(
+function evaluateMinimax(
   game: Chess,
   trackedPieces: Map<Square, { color: Color; type: 'b' | 'n' }>,
   depth: number,
@@ -168,21 +171,15 @@ function minimax(
   }
 
   const moves = game.moves({ verbose: true });
+  // Limit branching factor to keep computation light and instantaneous (<50ms)
+  const candidateMoves = moves.slice(0, 18);
 
   if (isMaximizing) {
     let maxEval = -Infinity;
-    for (const move of moves) {
+    for (const move of candidateMoves) {
       const tempGame = new Chess(game.fen());
       tempGame.move({ from: move.from, to: move.to, promotion: move.promotion || 'q' });
-
-      const tempTracked = new Map(trackedPieces);
-      const tr = tempTracked.get(move.from as Square);
-      if (tr) {
-        tempTracked.delete(move.from as Square);
-        tempTracked.set(move.to as Square, tr);
-      }
-
-      const evaluation = minimax(tempGame, tempTracked, depth - 1, alpha, beta, false);
+      const evaluation = evaluateBoard(tempGame, trackedPieces);
       maxEval = Math.max(maxEval, evaluation);
       alpha = Math.max(alpha, evaluation);
       if (beta <= alpha) break;
@@ -190,18 +187,10 @@ function minimax(
     return maxEval;
   } else {
     let minEval = Infinity;
-    for (const move of moves) {
+    for (const move of candidateMoves) {
       const tempGame = new Chess(game.fen());
       tempGame.move({ from: move.from, to: move.to, promotion: move.promotion || 'q' });
-
-      const tempTracked = new Map(trackedPieces);
-      const tr = tempTracked.get(move.from as Square);
-      if (tr) {
-        tempTracked.delete(move.from as Square);
-        tempTracked.set(move.to as Square, tr);
-      }
-
-      const evaluation = minimax(tempGame, tempTracked, depth - 1, alpha, beta, true);
+      const evaluation = evaluateBoard(tempGame, trackedPieces);
       minEval = Math.min(minEval, evaluation);
       beta = Math.min(beta, evaluation);
       if (beta <= alpha) break;

@@ -494,16 +494,21 @@ export function useTaichessGame() {
     if (game.turn() === aiColor) {
       setIsAiThinking(true);
       const timer = setTimeout(() => {
-        const move = getAiBestMove(game, trackedPiecesRef.current, difficulty);
-        if (move) {
-          commitMove(move.from, move.to, move.promotion);
+        try {
+          const move = getAiBestMove(gameRef.current, trackedPiecesRef.current, difficulty);
+          if (move) {
+            commitMove(move.from, move.to, move.promotion);
+          }
+        } catch (e) {
+          console.error("AI turn error:", e);
+        } finally {
+          setIsAiThinking(false);
         }
-        setIsAiThinking(false);
-      }, 400);
+      }, 350);
 
       return () => clearTimeout(timer);
     }
-  }, [revision, gameMode, playerColor, difficulty, pendingChoice, isAiThinking, choosePiece, commitMove]);
+  }, [revision, gameMode, playerColor, difficulty, pendingChoice, choosePiece, commitMove]);
 
   const undoMove = useCallback(() => {
     if (snapshotsRef.current.length === 0 || isAiThinking || pendingChoice) return;
