@@ -346,11 +346,13 @@ export function useTaichessGame() {
         if (piece === "r" && transformationIsSafe(game, pending.to, pending.mover, "r")) {
           game.remove(pending.to);
           game.put({ type: "r", color: pending.mover }, pending.to);
+          // Re-instantiate Chess from FEN so internal move generator and history commit the piece change!
+          gameRef.current = new Chess(game.fen());
           sounds.playTransform();
           setHistory((current) =>
             current.map((entry, index) =>
               index === current.length - 1
-                ? { ...entry, note: "TAICHESS · se convirtió en torre" }
+                ? { ...entry, note: "TAICHESS · se convirtió en torre", fen: gameRef.current.fen() }
                 : entry,
             ),
           );
@@ -378,6 +380,8 @@ export function useTaichessGame() {
             color: pending.mover,
             type: piece,
           });
+          // Re-instantiate Chess from FEN so internal move generator and history commit the piece change!
+          gameRef.current = new Chess(game.fen());
           sounds.playTransform();
           setHistory((current) =>
             current.map((entry, index) =>
@@ -385,6 +389,7 @@ export function useTaichessGame() {
                 ? {
                     ...entry,
                     note: `TAICHESS · el peón se transformó en ${piece === "b" ? "alfil" : "caballo"}`,
+                    fen: gameRef.current.fen(),
                   }
                 : entry,
             ),
