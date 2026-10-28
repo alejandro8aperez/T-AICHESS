@@ -1,4 +1,4 @@
-import { type ReactNode, useEffect, useState, useTransition } from 'react';
+import { type ReactNode, useEffect, useState } from 'react';
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
 import { ErrorBoundary } from '@/components/error-boundary';
 import { Toaster } from '@/components/ui/toaster';
@@ -56,6 +56,12 @@ function Game() {
     legalTargets,
     lastMove,
     history,
+    viewHistoryIndex,
+    setViewHistoryIndex,
+    navFirst,
+    navPrev,
+    navNext,
+    navLast,
     status,
     pendingChoice,
     isGameOver,
@@ -69,12 +75,18 @@ function Game() {
     setPlayerColor,
     difficulty,
     setDifficulty,
+    aiSpeed,
+    setAiSpeed,
     isAiThinking,
+    isAiVsAiPaused,
+    setIsAiVsAiPaused,
     onSquareClick,
     choosePiece,
     newGame,
     undoMove,
+    resign,
     fen,
+    pgn,
     canUndo,
   } = useTaichessGame();
 
@@ -83,7 +95,7 @@ function Game() {
   const [blackMs, setBlackMs] = useState(INITIAL_CLOCK_MS);
   const [soundEnabled, setSoundEnabled] = useState(true);
   const [boardTheme, setBoardTheme] = useState<'classic' | 'wood' | 'blue' | 'dark'>('classic');
-  const [copiedNotice, setCopiedNotice] = useState(false);
+  const [copiedNotice, setCopiedNotice] = useState<string | null>(null);
 
   // Sync board orientation if playing vs AI as black
   useEffect(() => {
@@ -110,13 +122,13 @@ function Game() {
   };
 
   useEffect(() => {
-    if (isGameOver || pendingChoice) return undefined;
+    if (isGameOver || pendingChoice || viewHistoryIndex !== null) return undefined;
     const id = window.setInterval(() => {
       const setter = turn === 'w' ? setWhiteMs : setBlackMs;
       setter((ms) => Math.max(0, ms - 100));
     }, 100);
     return () => window.clearInterval(id);
-  }, [turn, isGameOver, pendingChoice]);
+  }, [turn, isGameOver, pendingChoice, viewHistoryIndex]);
 
   const startNewGame = () => {
     newGame();
@@ -124,17 +136,19 @@ function Game() {
     setBlackMs(INITIAL_CLOCK_MS);
   };
 
-  const copyFen = () => {
-    navigator.clipboard.writeText(fen);
-    setCopiedNotice(true);
-    setTimeout(() => setCopiedNotice(false), 2000);
+  const copyToClipboard = (text: string, label: string) => {
+    navigator.clipboard.writeText(text);
+    setCopiedNotice(label);
+    setTimeout(() => setCopiedNotice(null), 2000);
   };
 
   const pieceAt = (square: string) => pieces.find((piece) => piece.square === square);
   const groupedHistory = Array.from({ length: Math.ceil(history.length / 2) }, (_, index) => ({
     number: index + 1,
     white: history[index * 2],
+    whiteIdx: index * 2,
     black: history[index * 2 + 1],
+    blackIdx: index * 2 + 1,
   }));
 
   const isWhiteTurn = turn === 'w';
@@ -156,7 +170,7 @@ function Game() {
       ? 'El peón llegó a la última fila. Selecciona la pieza de promoción.'
       : pendingChoice?.reason === 'return-transform'
         ? pendingChoice.choices.some((choice) => choice.piece === 'r')
-          ? 'Tu alfil o caballo llegó a una casilla azul (e4/e5). ¡Puedes conservarlo o convertirlo en torre!'
+          ? 'Tu pieza llegó a una casilla azul (e4/e5). ¡Puedes conservarla o convertirla en torre!'
           : 'Puedes conservar esta pieza como alfil o caballo. Convertirla en torre dejaría a tu rey en jaque.'
         : 'El peón llegó a una casilla azul (e4/e5). Puedes mantenerlo o transformarlo en alfil o caballo.';
 
@@ -167,7 +181,7 @@ function Game() {
 
   const renderClock = (color: 'w' | 'b') => {
     const ms = color === 'w' ? whiteMs : blackMs;
-    const active = !isGameOver && !pendingChoice && turn === color;
+    const active = !isGameOver && !pendingChoice && turn === color && viewHistoryIndex === null;
     const low = ms <= 30_000;
     return (
       <div className={`rclock ${active ? 'active' : ''} ${low ? 'low' : ''}`} aria-live="polite">
@@ -177,8 +191,18 @@ function Game() {
   };
 
   const renderPlayer = (color: 'w' | 'b') => {
-    const isAi = gameMode === 'ai' && color !== playerColor;
-    const label = isAi ? `IA (${difficulty})` : color === 'w' ? 'Blancas' : 'Negras';
+    let label = color === 'w' ? 'Blancas' : 'Negras';
+    let rating = 'local';
+
+    if (gameMode === 'ai') {
+      const isAi = color !== playerColor;
+      label = isAi ? `Computadora (${difficulty})` : `Jugador (${color === 'w' ? 'Blancas' : 'Negras'})`;
+      rating = isAi ? 'bot' : 'humano';
+    } else if (gameMode === 'ai-vs-ai') {
+      label = `PC ${color === 'w' ? 'Blancas' : 'Negras'} (${difficulty})`;
+      rating = 'bot';
+    }
+
     const captures = color === 'w' ? capturedBlack : capturedWhite;
     const diff = color === 'w' ? materialScore : -materialScore;
 
@@ -186,7 +210,7 @@ function Game() {
       <div className="ruser">
         <span className={`dot ${color === 'w' ? 'white' : 'black'}`} />
         <span className="uname">{label}</span>
-        <span className="rating">{isAi ? 'motor' : 'local'}</span>
+        <span className="rating">{rating}</span>
         {captures.length > 0 && (
           <div className="ruser-captures" title={`Piezas capturadas por ${label}`}>
             {captures.map((p, idx) => (
@@ -273,6 +297,13 @@ function Game() {
                 }),
               )}
             </div>
+
+            {viewHistoryIndex !== null && (
+              <div className="review-banner" onClick={() => setViewHistoryIndex(null)}>
+                <span>Modo Análisis (Jugada {viewHistoryIndex + 1}/{history.length}) · Haz clic para volver a la partida en vivo</span>
+              </div>
+            )}
+
             {pendingChoice && (
               <div className="choice-backdrop" role="presentation">
                 <section className="choice-dialog" role="dialog" aria-modal="true" aria-labelledby="choice-heading" data-testid="choice-dialog">
@@ -310,6 +341,7 @@ function Game() {
           <div className="table-clock desktop-only">{renderClock(topColor)}</div>
           <div className="table-user desktop-only">{renderPlayer(topColor)}</div>
 
+          {/* Move History with Chess.com style review */}
           <div className="rmoves" data-testid="move-history" aria-labelledby="history-heading">
             <div className="rmoves-head">
               <h2 id="history-heading">Jugadas</h2>
@@ -321,10 +353,40 @@ function Game() {
               ) : groupedHistory.map((row) => (
                 <div className="move-row" key={row.number} data-testid={`move-row-${row.number}`}>
                   <span className="move-number">{row.number}.</span>
-                  <span className="move-san" title={row.white?.note}>{row.white?.san ?? '—'}</span>
-                  <span className="move-san" title={row.black?.note}>{row.black?.san ?? ''}</span>
+                  <span
+                    className={`move-san ${viewHistoryIndex === row.whiteIdx ? 'move-active' : ''}`}
+                    onClick={() => setViewHistoryIndex(row.whiteIdx)}
+                    title={row.white?.note}
+                  >
+                    {row.white?.san ?? '—'}
+                  </span>
+                  {row.black && (
+                    <span
+                      className={`move-san ${viewHistoryIndex === row.blackIdx ? 'move-active' : ''}`}
+                      onClick={() => setViewHistoryIndex(row.blackIdx)}
+                      title={row.black?.note}
+                    >
+                      {row.black.san}
+                    </span>
+                  )}
                 </div>
               ))}
+            </div>
+
+            {/* Chess.com Navigation Bar (|< < > >|) */}
+            <div className="history-nav-bar">
+              <button type="button" className="nav-btn" onClick={navFirst} title="Primera jugada (Inicio)">
+                ⏮
+              </button>
+              <button type="button" className="nav-btn" onClick={navPrev} title="Jugada anterior">
+                ◀
+              </button>
+              <button type="button" className="nav-btn" onClick={navNext} title="Jugada siguiente">
+                ▶
+              </button>
+              <button type="button" className="nav-btn" onClick={navLast} title="Última jugada (En vivo)">
+                ⏭
+              </button>
             </div>
           </div>
 
@@ -335,7 +397,7 @@ function Game() {
             </div>
             <div className="rcontrols-buttons">
               <button type="button" data-testid="button-new-game" className="btn-primary" onClick={startNewGame}>
-                Nueva partida
+                + Nueva
               </button>
               <button
                 type="button"
@@ -349,8 +411,14 @@ function Game() {
               <button type="button" className="btn-ghost" onClick={() => setFlipped((value) => !value)}>
                 ↻ Girar
               </button>
-              <button type="button" className="btn-ghost" onClick={copyFen} title="Copiar FEN al portapapeles">
-                {copiedNotice ? '✓ Copiado' : '📋 FEN'}
+              <button
+                type="button"
+                className="btn-ghost btn-danger-soft"
+                disabled={isGameOver}
+                onClick={() => resign(turn)}
+                title="Rendirse (Chess.com)"
+              >
+                🏳 Rendirse
               </button>
             </div>
           </div>
@@ -363,45 +431,76 @@ function Game() {
                 id="mode-select"
                 className="settings-select"
                 value={gameMode}
-                onChange={(e) => setGameMode(e.target.value as 'pvp' | 'ai')}
+                onChange={(e) => setGameMode(e.target.value as 'pvp' | 'ai' | 'ai-vs-ai')}
               >
                 <option value="ai">Vs Computadora (IA)</option>
+                <option value="ai-vs-ai">🤖 PC vs PC (Demo IA)</option>
                 <option value="pvp">2 Jugadores (Local)</option>
               </select>
             </div>
 
-            {gameMode === 'ai' && (
+            {gameMode === 'ai-vs-ai' && (
               <>
                 <div className="settings-row">
-                  <label htmlFor="diff-select">Dificultad IA:</label>
+                  <label htmlFor="speed-select">Velocidad PC vs PC:</label>
                   <select
-                    id="diff-select"
+                    id="speed-select"
                     className="settings-select"
-                    value={difficulty}
-                    onChange={(e) => setDifficulty(e.target.value as 'easy' | 'medium' | 'hard')}
+                    value={aiSpeed}
+                    onChange={(e) => setAiSpeed(Number(e.target.value))}
                   >
-                    <option value="easy">Fácil (Rápido)</option>
-                    <option value="medium">Medio</option>
-                    <option value="hard">Difícil (Minimax)</option>
+                    <option value="1200">Lenta (1.2s)</option>
+                    <option value="600">Normal (0.6s)</option>
+                    <option value="250">Rápida (0.25s)</option>
                   </select>
                 </div>
                 <div className="settings-row">
-                  <label htmlFor="color-select">Juegas con:</label>
-                  <select
-                    id="color-select"
-                    className="settings-select"
-                    value={playerColor}
-                    onChange={(e) => {
-                      const c = e.target.value as 'w' | 'b';
-                      setPlayerColor(c);
-                      startNewGame();
-                    }}
+                  <span>Control de simulación:</span>
+                  <button
+                    type="button"
+                    className="btn-ghost"
+                    style={{ padding: '3px 8px', fontSize: '11px' }}
+                    onClick={() => setIsAiVsAiPaused(!isAiVsAiPaused)}
                   >
-                    <option value="w">Blancas (Empieza)</option>
-                    <option value="b">Negras</option>
-                  </select>
+                    {isAiVsAiPaused ? '▶ Reanudar' : '⏸ Pausar'}
+                  </button>
                 </div>
               </>
+            )}
+
+            {gameMode !== 'pvp' && (
+              <div className="settings-row">
+                <label htmlFor="diff-select">Dificultad IA:</label>
+                <select
+                  id="diff-select"
+                  className="settings-select"
+                  value={difficulty}
+                  onChange={(e) => setDifficulty(e.target.value as 'easy' | 'medium' | 'hard')}
+                >
+                  <option value="easy">Fácil (Principiante)</option>
+                  <option value="medium">Medio (Estratégico)</option>
+                  <option value="hard">Difícil (Minimax)</option>
+                </select>
+              </div>
+            )}
+
+            {gameMode === 'ai' && (
+              <div className="settings-row">
+                <label htmlFor="color-select">Juegas con:</label>
+                <select
+                  id="color-select"
+                  className="settings-select"
+                  value={playerColor}
+                  onChange={(e) => {
+                    const c = e.target.value as 'w' | 'b';
+                    setPlayerColor(c);
+                    startNewGame();
+                  }}
+                >
+                  <option value="w">Blancas (Empiezas)</option>
+                  <option value="b">Negras</option>
+                </select>
+              </div>
             )}
 
             <div className="settings-row">
@@ -413,10 +512,30 @@ function Game() {
                 onChange={(e) => setBoardTheme(e.target.value as 'classic' | 'wood' | 'blue' | 'dark')}
               >
                 <option value="classic">Lichess Verde</option>
-                <option value="wood">Madera</option>
+                <option value="wood">Madera Chess.com</option>
                 <option value="blue">Azul Océano</option>
                 <option value="dark">Gris Carbón</option>
               </select>
+            </div>
+
+            {/* Chess.com Export controls: FEN and PGN */}
+            <div className="settings-row" style={{ marginTop: '4px', gap: '6px' }}>
+              <button
+                type="button"
+                className="btn-ghost"
+                style={{ flex: 1, padding: '4px 6px', fontSize: '11px' }}
+                onClick={() => copyToClipboard(fen, 'FEN')}
+              >
+                {copiedNotice === 'FEN' ? '✓ Copiado' : '📋 Copiar FEN'}
+              </button>
+              <button
+                type="button"
+                className="btn-ghost"
+                style={{ flex: 1, padding: '4px 6px', fontSize: '11px' }}
+                onClick={() => copyToClipboard(pgn, 'PGN')}
+              >
+                {copiedNotice === 'PGN' ? '✓ Copiado' : '📜 Copiar PGN'}
+              </button>
             </div>
           </div>
 
@@ -429,7 +548,7 @@ function Game() {
               • Un peón que llega a <strong>e4</strong> o <strong>e5</strong> (marcadas con ★) puede transformarse inmediatamente en <strong>alfil</strong> o <strong>caballo</strong>.
             </p>
             <p>
-              • Si ese alfil o caballo sale y vuelve a caer en <strong>e4</strong> o <strong>e5</strong>, ¡puede transformarse en <strong>torre</strong>!
+              • Si un alfil o caballo cae en <strong>e4</strong> o <strong>e5</strong>, ¡puede transformarse en <strong>torre</strong>!
             </p>
           </section>
         </aside>
