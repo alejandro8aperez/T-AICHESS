@@ -1,7 +1,8 @@
 import { useCallback, useMemo, useRef, useState, useEffect } from "react";
 import { Chess, type Color, type PieceSymbol, type Square } from "chess.js";
 import { sounds } from "@/lib/sound";
-import { getAiBestMove, type Difficulty } from "@/lib/chessAi";
+import { positionKey, type Difficulty } from "@/lib/chessAi";
+import { cancelAiRequests, requestAiMove } from "@/lib/aiClient";
 
 const BLUE_SQUARES = new Set<Square>(["e4", "e5"]);
 
@@ -53,6 +54,7 @@ type Snapshot = {
   trackedPieces: [Square, TrackedPiece][];
   history: HistoryEntry[];
   lastMove: { from: Square; to: Square } | null;
+  positionLog: string[];
 };
 
 export type GameMode = "pvp" | "ai" | "ai-vs-ai";
@@ -107,7 +109,13 @@ function getTaichessLegalTargets(
   return game.moves({ square: from, verbose: true }).map((move) => move.to);
 }
 
-function getStatus(game: Chess) {
+function getStatus(game: Chess, resigned: Color | null, repetition: boolean) {
+  if (resigned) {
+    return `Rendición de ${colorName(resigned)} · ganan ${colorName(resigned === "w" ? "b" : "w")}`;
+  }
+  if (repetition) {
+    return "Tablas · triple repetición";
+  }
   if (game.isCheckmate()) {
     return `Jaque mate · ganan ${colorName(game.turn() === "w" ? "b" : "w")}`;
   }
@@ -182,11 +190,36 @@ function returnTransformChoices(
   return choices;
 }
 
+function buildPgn(history: HistoryEntry[], result: string) {
+  const parts: string[] = [];
+  let moveNumber = 1;
+  history.forEach((entry, index) => {
+    if (entry.san === "🏳️") return;
+    if (entry.color === "w") {
+      parts.push(`${moveNumber}.`);
+    } else if (index === 0 || parts.length === 0) {
+      parts.push(`${moveNumber}...`);
+    }
+    parts.push(entry.san);
+    if (entry.note) parts.push(`{${entry.note.replace(/[{}]/g, "")}}`);
+    if (entry.color === "b") moveNumber += 1;
+  });
+  const header = [
+    '[Event "TAICHESS"]',
+    '[Variant "TAICHESS (FIDE + transformación en e4/e5)"]',
+    `[Result "${result}"]`,
+  ].join("\n");
+  return `${header}\n\n${parts.join(" ")} ${result}`.trim();
+}
+
 export function useTaichessGame() {
   const gameRef = useRef(new Chess());
   const trackedPiecesRef = useRef(new Map<Square, TrackedPiece>());
   const pendingMoveRef = useRef<PendingMove | null>(null);
   const snapshotsRef = useRef<Snapshot[]>([]);
+  const resignedRef = useRef<Color | null>(null);
+  const positionLogRef = useRef<string[]>([positionKey(new Chess().fen())]);
+  const aiPlannedTransformRef = useRef<PieceSymbol | null>(null);
 
   const [revision, setRevision] = useState(0);
   const [selectedSquare, setSelectedSquare] = useState<Square | null>(null);
@@ -216,8 +249,20 @@ export function useTaichessGame() {
       trackedPieces: Array.from(trackedPiecesRef.current.entries()),
       history: [...history],
       lastMove,
+      positionLog: [...positionLogRef.current],
     });
   }, [history, lastMove]);
+
+  const isRepetition = useCallback(() => {
+    const log = positionLogRef.current;
+    const last = log[log.length - 1];
+    return log.filter((key) => key === last).length >= 3;
+  }, []);
+
+  const isOver = useCallback(
+    () => gameRef.current.isGameOver() || resignedRef.current !== null || isRepetition(),
+    [isRepetition],
+  );
 
   const recordMove = useCallback(
     (san: string, color: Color, note?: string) => {
@@ -264,12 +309,14 @@ export function useTaichessGame() {
       trackedPiecesRef.current.delete(capturedSquare);
       trackedPiecesRef.current.delete(from);
 
+      positionLogRef.current.push(positionKey(game.fen()));
+
       setSelectedSquare(null);
       setLastMove({ from, to });
       recordMove(committedMove.san, mover);
 
       // Play appropriate sound
-      if (game.isGameOver()) {
+      if (game.isGameOver() || isRepetition()) {
         sounds.playGameEnd();
       } else if (game.isCheck()) {
         sounds.playCheck();
@@ -319,7 +366,7 @@ export function useTaichessGame() {
 
       bumpRevision();
     },
-    [bumpRevision, recordMove, saveSnapshot],
+    [bumpRevision, isRepetition, recordMove, saveSnapshot],
   );
 
   const choosePiece = useCallback(
@@ -348,6 +395,7 @@ export function useTaichessGame() {
           game.put({ type: "r", color: pending.mover }, pending.to);
           // Re-instantiate Chess from FEN so internal move generator and history commit the piece change!
           gameRef.current = new Chess(game.fen());
+          positionLogRef.current[positionLogRef.current.length - 1] = positionKey(gameRef.current.fen());
           sounds.playTransform();
           setHistory((current) =>
             current.map((entry, index) =>
@@ -382,6 +430,7 @@ export function useTaichessGame() {
           });
           // Re-instantiate Chess from FEN so internal move generator and history commit the piece change!
           gameRef.current = new Chess(game.fen());
+          positionLogRef.current[positionLogRef.current.length - 1] = positionKey(gameRef.current.fen());
           sounds.playTransform();
           setHistory((current) =>
             current.map((entry, index) =>
@@ -406,7 +455,7 @@ export function useTaichessGame() {
 
   const onSquareClick = useCallback(
     (squareName: string) => {
-      if (pendingChoice || gameRef.current.isGameOver() || isAiThinking || gameMode === "ai-vs-ai") return;
+      if (pendingChoice || isOver() || isAiThinking || gameMode === "ai-vs-ai") return;
       if (viewHistoryIndex !== null) {
         setViewHistoryIndex(null); // return to live position on click
       }
@@ -470,94 +519,83 @@ export function useTaichessGame() {
         setSelectedSquare(null);
       }
     },
-    [commitMove, gameMode, isAiThinking, pendingChoice, playerColor, selectedSquare, viewHistoryIndex],
+    [commitMove, gameMode, isAiThinking, isOver, pendingChoice, playerColor, selectedSquare, viewHistoryIndex],
+  );
+
+  // Elección automática de la IA cuando una jugada suya activa una transformación
+  const autoChoose = useCallback(
+    (pc: PendingChoice) => {
+      const planned = aiPlannedTransformRef.current;
+      aiPlannedTransformRef.current = null;
+      if (planned && pc.choices.some((c) => c.piece === planned)) {
+        choosePiece(planned);
+        return;
+      }
+      if (pc.reason === "first-transform") {
+        choosePiece(pc.choices.some((c) => c.piece === "b") ? "b" : "n");
+      } else if (pc.reason === "return-transform") {
+        choosePiece(pc.choices.some((c) => c.piece === "r") ? "r" : pc.choices[0].piece);
+      } else {
+        choosePiece("q");
+      }
+    },
+    [choosePiece],
   );
 
   // AI Turn handler (vs AI and PC vs PC)
   useEffect(() => {
     const game = gameRef.current;
-    if (game.isGameOver()) return;
+    if (isOver()) return;
 
-    if (gameMode === "ai-vs-ai") {
-      if (isAiVsAiPaused) return;
+    const aiColor = playerColor === "w" ? "b" : "w";
+    const isAiTurn =
+      gameMode === "ai-vs-ai" ? !isAiVsAiPaused : gameMode === "ai" && game.turn() === aiColor;
 
-      if (pendingChoice) {
-        const timer = setTimeout(() => {
-          if (pendingChoice.reason === "first-transform") {
-            const hasBishop = pendingChoice.choices.some((c) => c.piece === "b");
-            choosePiece(hasBishop ? "b" : "n");
-          } else if (pendingChoice.reason === "return-transform") {
-            const hasRook = pendingChoice.choices.some((c) => c.piece === "r");
-            choosePiece(hasRook ? "r" : pendingChoice.choices[0].piece);
-          } else if (pendingChoice.reason === "promotion") {
-            choosePiece("q");
-          }
-        }, 200);
-        return () => clearTimeout(timer);
-      }
-
-      setIsAiThinking(true);
-      const timer = setTimeout(() => {
-        try {
-          const move = getAiBestMove(gameRef.current, trackedPiecesRef.current, difficulty);
-          if (move) {
-            commitMove(move.from, move.to, move.promotion);
-          }
-        } catch (e) {
-          console.error("AI vs AI error:", e);
-        } finally {
-          setIsAiThinking(false);
-        }
-      }, Math.max(100, aiSpeed));
-
+    if (pendingChoice) {
+      const aiOwnsChoice =
+        gameMode === "ai-vs-ai" ? !isAiVsAiPaused : gameMode === "ai" && pendingMoveRef.current?.mover === aiColor;
+      if (!aiOwnsChoice) return;
+      const timer = setTimeout(() => autoChoose(pendingChoice), gameMode === "ai-vs-ai" ? 200 : 250);
       return () => clearTimeout(timer);
     }
 
-    if (gameMode === "ai") {
-      const aiColor = playerColor === "w" ? "b" : "w";
+    if (!isAiTurn) return;
 
-      if (pendingChoice) {
-        if (pendingMoveRef.current?.mover === aiColor) {
-          const timer = setTimeout(() => {
-            if (pendingChoice.reason === "first-transform") {
-              const hasBishop = pendingChoice.choices.some((c) => c.piece === "b");
-              choosePiece(hasBishop ? "b" : "n");
-            } else if (pendingChoice.reason === "return-transform") {
-              const hasRook = pendingChoice.choices.some((c) => c.piece === "r");
-              choosePiece(hasRook ? "r" : pendingChoice.choices[0].piece);
-            } else if (pendingChoice.reason === "promotion") {
-              choosePiece("q");
-            }
-          }, 250);
-          return () => clearTimeout(timer);
-        }
-        return;
-      }
-
-      if (game.turn() === aiColor) {
-        setIsAiThinking(true);
-        const timer = setTimeout(() => {
-          try {
-            const move = getAiBestMove(gameRef.current, trackedPiecesRef.current, difficulty);
-            if (move) {
-              commitMove(move.from, move.to, move.promotion);
-            }
-          } catch (e) {
-            console.error("AI turn error:", e);
-          } finally {
-            setIsAiThinking(false);
+    let cancelled = false;
+    let inFlight = false;
+    setIsAiThinking(true);
+    const delay = gameMode === "ai-vs-ai" ? Math.max(100, aiSpeed) : 250;
+    const timer = setTimeout(() => {
+      const fen = gameRef.current.fen();
+      inFlight = true;
+      requestAiMove(fen, difficulty, positionLogRef.current)
+        .then((move) => {
+          inFlight = false;
+          if (cancelled) return;
+          if (move) {
+            aiPlannedTransformRef.current = move.transform ?? null;
+            commitMove(move.from, move.to, move.promotion);
           }
-        }, 250);
+        })
+        .catch((e) => console.error("AI error:", e))
+        .finally(() => {
+          if (!cancelled) setIsAiThinking(false);
+        });
+    }, delay);
 
-        return () => clearTimeout(timer);
-      }
-    }
-  }, [revision, gameMode, playerColor, difficulty, pendingChoice, choosePiece, commitMove, isAiVsAiPaused, aiSpeed]);
+    return () => {
+      cancelled = true;
+      clearTimeout(timer);
+      if (inFlight) cancelAiRequests();
+      setIsAiThinking(false);
+    };
+  }, [revision, gameMode, playerColor, difficulty, pendingChoice, autoChoose, commitMove, isAiVsAiPaused, aiSpeed, isOver]);
 
   const undoMove = useCallback(() => {
     if (snapshotsRef.current.length === 0 || isAiThinking || pendingChoice) return;
 
-    const steps = gameMode === "ai" && snapshotsRef.current.length >= 2 ? 2 : 1;
+    const steps =
+      gameMode === "ai" && snapshotsRef.current.length >= 2 && resignedRef.current === null ? 2 : 1;
     let targetSnapshot: Snapshot | undefined;
 
     for (let i = 0; i < steps; i++) {
@@ -566,6 +604,8 @@ export function useTaichessGame() {
 
     if (targetSnapshot) {
       gameRef.current = new Chess(targetSnapshot.fen);
+      positionLogRef.current = [...targetSnapshot.positionLog];
+      resignedRef.current = null;
       trackedPiecesRef.current = new Map(targetSnapshot.trackedPieces);
       setHistory(targetSnapshot.history);
       setLastMove(targetSnapshot.lastMove);
@@ -579,16 +619,22 @@ export function useTaichessGame() {
 
   // Chess.com style Resign (Rendirse)
   const resign = useCallback((color: Color) => {
-    if (gameRef.current.isGameOver()) return;
+    if (isOver()) return;
+    saveSnapshot();
     sounds.playGameEnd();
     const winner = color === "w" ? "negras" : "blancas";
+    resignedRef.current = color;
+    setSelectedSquare(null);
     recordMove("🏳️", color, `Rendición de ${colorName(color)} · ganan ${winner}`);
-    // Clear legal moves by loading a synthetic checkmate position or setting state
     bumpRevision();
-  }, [bumpRevision, recordMove]);
+  }, [bumpRevision, isOver, recordMove, saveSnapshot]);
 
   const newGame = useCallback(() => {
     gameRef.current = new Chess();
+    positionLogRef.current = [positionKey(gameRef.current.fen())];
+    resignedRef.current = null;
+    aiPlannedTransformRef.current = null;
+    cancelAiRequests();
     trackedPiecesRef.current.clear();
     pendingMoveRef.current = null;
     snapshotsRef.current = [];
@@ -686,9 +732,16 @@ export function useTaichessGame() {
       : pendingChoice.reason === "return-transform"
         ? "Elige cómo continúa la pieza"
         : "Elige cómo transformar el peón"
-    : getStatus(game);
+    : getStatus(game, resignedRef.current, isRepetition());
 
   // History navigation functions (like Chess.com)
+  const pgnResult = (() => {
+    if (resignedRef.current) return resignedRef.current === "w" ? "0-1" : "1-0";
+    if (game.isCheckmate()) return game.turn() === "w" ? "0-1" : "1-0";
+    if (game.isDraw() || isRepetition()) return "1/2-1/2";
+    return "*";
+  })();
+
   const navFirst = () => setViewHistoryIndex(history.length > 0 ? 0 : null);
   const navPrev = () => {
     if (viewHistoryIndex === null) {
@@ -723,7 +776,7 @@ export function useTaichessGame() {
     navLast,
     status,
     pendingChoice,
-    isGameOver: !pendingChoice && game.isGameOver(),
+    isGameOver: !pendingChoice && isOver(),
     isCheck: game.isCheck(),
     kingInCheck,
     capturedWhite,
@@ -746,7 +799,7 @@ export function useTaichessGame() {
     undoMove,
     resign,
     fen: game.fen(),
-    pgn: game.pgn(),
+    pgn: buildPgn(history, pgnResult),
     canUndo: snapshotsRef.current.length > 0 && !isAiThinking && !pendingChoice,
   };
 }

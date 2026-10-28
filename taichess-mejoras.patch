@@ -1,0 +1,1098 @@
+diff --git a/src/App.tsx b/src/App.tsx
+index 86eee61..15a76e6 100644
+--- a/src/App.tsx
++++ b/src/App.tsx
+@@ -490,7 +490,7 @@ function Game() {
+                 >
+                   <option value="easy">Fácil (Principiante)</option>
+                   <option value="medium">Medio (Estratégico)</option>
+-                  <option value="hard">Difícil (Minimax)</option>
++                  <option value="hard">Difícil (búsqueda α-β)</option>
+                 </select>
+               </div>
+             )}
+diff --git a/src/hooks/useTaichessGame.ts b/src/hooks/useTaichessGame.ts
+index 5b0d912..1a6a539 100644
+--- a/src/hooks/useTaichessGame.ts
++++ b/src/hooks/useTaichessGame.ts
+@@ -1,7 +1,8 @@
+ import { useCallback, useMemo, useRef, useState, useEffect } from "react";
+ import { Chess, type Color, type PieceSymbol, type Square } from "chess.js";
+ import { sounds } from "@/lib/sound";
+-import { getAiBestMove, type Difficulty } from "@/lib/chessAi";
++import { positionKey, type Difficulty } from "@/lib/chessAi";
++import { cancelAiRequests, requestAiMove } from "@/lib/aiClient";
+ 
+ const BLUE_SQUARES = new Set<Square>(["e4", "e5"]);
+ 
+@@ -53,6 +54,7 @@ type Snapshot = {
+   trackedPieces: [Square, TrackedPiece][];
+   history: HistoryEntry[];
+   lastMove: { from: Square; to: Square } | null;
++  positionLog: string[];
+ };
+ 
+ export type GameMode = "pvp" | "ai" | "ai-vs-ai";
+@@ -107,7 +109,13 @@ function getTaichessLegalTargets(
+   return game.moves({ square: from, verbose: true }).map((move) => move.to);
+ }
+ 
+-function getStatus(game: Chess) {
++function getStatus(game: Chess, resigned: Color | null, repetition: boolean) {
++  if (resigned) {
++    return `Rendición de ${colorName(resigned)} · ganan ${colorName(resigned === "w" ? "b" : "w")}`;
++  }
++  if (repetition) {
++    return "Tablas · triple repetición";
++  }
+   if (game.isCheckmate()) {
+     return `Jaque mate · ganan ${colorName(game.turn() === "w" ? "b" : "w")}`;
+   }
+@@ -182,11 +190,36 @@ function returnTransformChoices(
+   return choices;
+ }
+ 
++function buildPgn(history: HistoryEntry[], result: string) {
++  const parts: string[] = [];
++  let moveNumber = 1;
++  history.forEach((entry, index) => {
++    if (entry.san === "🏳️") return;
++    if (entry.color === "w") {
++      parts.push(`${moveNumber}.`);
++    } else if (index === 0 || parts.length === 0) {
++      parts.push(`${moveNumber}...`);
++    }
++    parts.push(entry.san);
++    if (entry.note) parts.push(`{${entry.note.replace(/[{}]/g, "")}}`);
++    if (entry.color === "b") moveNumber += 1;
++  });
++  const header = [
++    '[Event "TAICHESS"]',
++    '[Variant "TAICHESS (FIDE + transformación en e4/e5)"]',
++    `[Result "${result}"]`,
++  ].join("\n");
++  return `${header}\n\n${parts.join(" ")} ${result}`.trim();
++}
++
+ export function useTaichessGame() {
+   const gameRef = useRef(new Chess());
+   const trackedPiecesRef = useRef(new Map<Square, TrackedPiece>());
+   const pendingMoveRef = useRef<PendingMove | null>(null);
+   const snapshotsRef = useRef<Snapshot[]>([]);
++  const resignedRef = useRef<Color | null>(null);
++  const positionLogRef = useRef<string[]>([positionKey(new Chess().fen())]);
++  const aiPlannedTransformRef = useRef<PieceSymbol | null>(null);
+ 
+   const [revision, setRevision] = useState(0);
+   const [selectedSquare, setSelectedSquare] = useState<Square | null>(null);
+@@ -216,9 +249,21 @@ export function useTaichessGame() {
+       trackedPieces: Array.from(trackedPiecesRef.current.entries()),
+       history: [...history],
+       lastMove,
++      positionLog: [...positionLogRef.current],
+     });
+   }, [history, lastMove]);
+ 
++  const isRepetition = useCallback(() => {
++    const log = positionLogRef.current;
++    const last = log[log.length - 1];
++    return log.filter((key) => key === last).length >= 3;
++  }, []);
++
++  const isOver = useCallback(
++    () => gameRef.current.isGameOver() || resignedRef.current !== null || isRepetition(),
++    [isRepetition],
++  );
++
+   const recordMove = useCallback(
+     (san: string, color: Color, note?: string) => {
+       setHistory((current) => [
+@@ -264,12 +309,14 @@ export function useTaichessGame() {
+       trackedPiecesRef.current.delete(capturedSquare);
+       trackedPiecesRef.current.delete(from);
+ 
++      positionLogRef.current.push(positionKey(game.fen()));
++
+       setSelectedSquare(null);
+       setLastMove({ from, to });
+       recordMove(committedMove.san, mover);
+ 
+       // Play appropriate sound
+-      if (game.isGameOver()) {
++      if (game.isGameOver() || isRepetition()) {
+         sounds.playGameEnd();
+       } else if (game.isCheck()) {
+         sounds.playCheck();
+@@ -319,7 +366,7 @@ export function useTaichessGame() {
+ 
+       bumpRevision();
+     },
+-    [bumpRevision, recordMove, saveSnapshot],
++    [bumpRevision, isRepetition, recordMove, saveSnapshot],
+   );
+ 
+   const choosePiece = useCallback(
+@@ -348,6 +395,7 @@ export function useTaichessGame() {
+           game.put({ type: "r", color: pending.mover }, pending.to);
+           // Re-instantiate Chess from FEN so internal move generator and history commit the piece change!
+           gameRef.current = new Chess(game.fen());
++          positionLogRef.current[positionLogRef.current.length - 1] = positionKey(gameRef.current.fen());
+           sounds.playTransform();
+           setHistory((current) =>
+             current.map((entry, index) =>
+@@ -382,6 +430,7 @@ export function useTaichessGame() {
+           });
+           // Re-instantiate Chess from FEN so internal move generator and history commit the piece change!
+           gameRef.current = new Chess(game.fen());
++          positionLogRef.current[positionLogRef.current.length - 1] = positionKey(gameRef.current.fen());
+           sounds.playTransform();
+           setHistory((current) =>
+             current.map((entry, index) =>
+@@ -406,7 +455,7 @@ export function useTaichessGame() {
+ 
+   const onSquareClick = useCallback(
+     (squareName: string) => {
+-      if (pendingChoice || gameRef.current.isGameOver() || isAiThinking || gameMode === "ai-vs-ai") return;
++      if (pendingChoice || isOver() || isAiThinking || gameMode === "ai-vs-ai") return;
+       if (viewHistoryIndex !== null) {
+         setViewHistoryIndex(null); // return to live position on click
+       }
+@@ -470,94 +519,83 @@ export function useTaichessGame() {
+         setSelectedSquare(null);
+       }
+     },
+-    [commitMove, gameMode, isAiThinking, pendingChoice, playerColor, selectedSquare, viewHistoryIndex],
++    [commitMove, gameMode, isAiThinking, isOver, pendingChoice, playerColor, selectedSquare, viewHistoryIndex],
++  );
++
++  // Elección automática de la IA cuando una jugada suya activa una transformación
++  const autoChoose = useCallback(
++    (pc: PendingChoice) => {
++      const planned = aiPlannedTransformRef.current;
++      aiPlannedTransformRef.current = null;
++      if (planned && pc.choices.some((c) => c.piece === planned)) {
++        choosePiece(planned);
++        return;
++      }
++      if (pc.reason === "first-transform") {
++        choosePiece(pc.choices.some((c) => c.piece === "b") ? "b" : "n");
++      } else if (pc.reason === "return-transform") {
++        choosePiece(pc.choices.some((c) => c.piece === "r") ? "r" : pc.choices[0].piece);
++      } else {
++        choosePiece("q");
++      }
++    },
++    [choosePiece],
+   );
+ 
+   // AI Turn handler (vs AI and PC vs PC)
+   useEffect(() => {
+     const game = gameRef.current;
+-    if (game.isGameOver()) return;
+-
+-    if (gameMode === "ai-vs-ai") {
+-      if (isAiVsAiPaused) return;
+-
+-      if (pendingChoice) {
+-        const timer = setTimeout(() => {
+-          if (pendingChoice.reason === "first-transform") {
+-            const hasBishop = pendingChoice.choices.some((c) => c.piece === "b");
+-            choosePiece(hasBishop ? "b" : "n");
+-          } else if (pendingChoice.reason === "return-transform") {
+-            const hasRook = pendingChoice.choices.some((c) => c.piece === "r");
+-            choosePiece(hasRook ? "r" : pendingChoice.choices[0].piece);
+-          } else if (pendingChoice.reason === "promotion") {
+-            choosePiece("q");
+-          }
+-        }, 200);
+-        return () => clearTimeout(timer);
+-      }
++    if (isOver()) return;
+ 
+-      setIsAiThinking(true);
+-      const timer = setTimeout(() => {
+-        try {
+-          const move = getAiBestMove(gameRef.current, trackedPiecesRef.current, difficulty);
+-          if (move) {
+-            commitMove(move.from, move.to, move.promotion);
+-          }
+-        } catch (e) {
+-          console.error("AI vs AI error:", e);
+-        } finally {
+-          setIsAiThinking(false);
+-        }
+-      }, Math.max(100, aiSpeed));
++    const aiColor = playerColor === "w" ? "b" : "w";
++    const isAiTurn =
++      gameMode === "ai-vs-ai" ? !isAiVsAiPaused : gameMode === "ai" && game.turn() === aiColor;
+ 
++    if (pendingChoice) {
++      const aiOwnsChoice =
++        gameMode === "ai-vs-ai" ? !isAiVsAiPaused : gameMode === "ai" && pendingMoveRef.current?.mover === aiColor;
++      if (!aiOwnsChoice) return;
++      const timer = setTimeout(() => autoChoose(pendingChoice), gameMode === "ai-vs-ai" ? 200 : 250);
+       return () => clearTimeout(timer);
+     }
+ 
+-    if (gameMode === "ai") {
+-      const aiColor = playerColor === "w" ? "b" : "w";
+-
+-      if (pendingChoice) {
+-        if (pendingMoveRef.current?.mover === aiColor) {
+-          const timer = setTimeout(() => {
+-            if (pendingChoice.reason === "first-transform") {
+-              const hasBishop = pendingChoice.choices.some((c) => c.piece === "b");
+-              choosePiece(hasBishop ? "b" : "n");
+-            } else if (pendingChoice.reason === "return-transform") {
+-              const hasRook = pendingChoice.choices.some((c) => c.piece === "r");
+-              choosePiece(hasRook ? "r" : pendingChoice.choices[0].piece);
+-            } else if (pendingChoice.reason === "promotion") {
+-              choosePiece("q");
+-            }
+-          }, 250);
+-          return () => clearTimeout(timer);
+-        }
+-        return;
+-      }
+-
+-      if (game.turn() === aiColor) {
+-        setIsAiThinking(true);
+-        const timer = setTimeout(() => {
+-          try {
+-            const move = getAiBestMove(gameRef.current, trackedPiecesRef.current, difficulty);
+-            if (move) {
+-              commitMove(move.from, move.to, move.promotion);
+-            }
+-          } catch (e) {
+-            console.error("AI turn error:", e);
+-          } finally {
+-            setIsAiThinking(false);
++    if (!isAiTurn) return;
++
++    let cancelled = false;
++    let inFlight = false;
++    setIsAiThinking(true);
++    const delay = gameMode === "ai-vs-ai" ? Math.max(100, aiSpeed) : 250;
++    const timer = setTimeout(() => {
++      const fen = gameRef.current.fen();
++      inFlight = true;
++      requestAiMove(fen, difficulty, positionLogRef.current)
++        .then((move) => {
++          inFlight = false;
++          if (cancelled) return;
++          if (move) {
++            aiPlannedTransformRef.current = move.transform ?? null;
++            commitMove(move.from, move.to, move.promotion);
+           }
+-        }, 250);
++        })
++        .catch((e) => console.error("AI error:", e))
++        .finally(() => {
++          if (!cancelled) setIsAiThinking(false);
++        });
++    }, delay);
+ 
+-        return () => clearTimeout(timer);
+-      }
+-    }
+-  }, [revision, gameMode, playerColor, difficulty, pendingChoice, choosePiece, commitMove, isAiVsAiPaused, aiSpeed]);
++    return () => {
++      cancelled = true;
++      clearTimeout(timer);
++      if (inFlight) cancelAiRequests();
++      setIsAiThinking(false);
++    };
++  }, [revision, gameMode, playerColor, difficulty, pendingChoice, autoChoose, commitMove, isAiVsAiPaused, aiSpeed, isOver]);
+ 
+   const undoMove = useCallback(() => {
+     if (snapshotsRef.current.length === 0 || isAiThinking || pendingChoice) return;
+ 
+-    const steps = gameMode === "ai" && snapshotsRef.current.length >= 2 ? 2 : 1;
++    const steps =
++      gameMode === "ai" && snapshotsRef.current.length >= 2 && resignedRef.current === null ? 2 : 1;
+     let targetSnapshot: Snapshot | undefined;
+ 
+     for (let i = 0; i < steps; i++) {
+@@ -566,6 +604,8 @@ export function useTaichessGame() {
+ 
+     if (targetSnapshot) {
+       gameRef.current = new Chess(targetSnapshot.fen);
++      positionLogRef.current = [...targetSnapshot.positionLog];
++      resignedRef.current = null;
+       trackedPiecesRef.current = new Map(targetSnapshot.trackedPieces);
+       setHistory(targetSnapshot.history);
+       setLastMove(targetSnapshot.lastMove);
+@@ -579,16 +619,22 @@ export function useTaichessGame() {
+ 
+   // Chess.com style Resign (Rendirse)
+   const resign = useCallback((color: Color) => {
+-    if (gameRef.current.isGameOver()) return;
++    if (isOver()) return;
++    saveSnapshot();
+     sounds.playGameEnd();
+     const winner = color === "w" ? "negras" : "blancas";
++    resignedRef.current = color;
++    setSelectedSquare(null);
+     recordMove("🏳️", color, `Rendición de ${colorName(color)} · ganan ${winner}`);
+-    // Clear legal moves by loading a synthetic checkmate position or setting state
+     bumpRevision();
+-  }, [bumpRevision, recordMove]);
++  }, [bumpRevision, isOver, recordMove, saveSnapshot]);
+ 
+   const newGame = useCallback(() => {
+     gameRef.current = new Chess();
++    positionLogRef.current = [positionKey(gameRef.current.fen())];
++    resignedRef.current = null;
++    aiPlannedTransformRef.current = null;
++    cancelAiRequests();
+     trackedPiecesRef.current.clear();
+     pendingMoveRef.current = null;
+     snapshotsRef.current = [];
+@@ -686,9 +732,16 @@ export function useTaichessGame() {
+       : pendingChoice.reason === "return-transform"
+         ? "Elige cómo continúa la pieza"
+         : "Elige cómo transformar el peón"
+-    : getStatus(game);
++    : getStatus(game, resignedRef.current, isRepetition());
+ 
+   // History navigation functions (like Chess.com)
++  const pgnResult = (() => {
++    if (resignedRef.current) return resignedRef.current === "w" ? "0-1" : "1-0";
++    if (game.isCheckmate()) return game.turn() === "w" ? "0-1" : "1-0";
++    if (game.isDraw() || isRepetition()) return "1/2-1/2";
++    return "*";
++  })();
++
+   const navFirst = () => setViewHistoryIndex(history.length > 0 ? 0 : null);
+   const navPrev = () => {
+     if (viewHistoryIndex === null) {
+@@ -723,7 +776,7 @@ export function useTaichessGame() {
+     navLast,
+     status,
+     pendingChoice,
+-    isGameOver: !pendingChoice && game.isGameOver(),
++    isGameOver: !pendingChoice && isOver(),
+     isCheck: game.isCheck(),
+     kingInCheck,
+     capturedWhite,
+@@ -746,7 +799,7 @@ export function useTaichessGame() {
+     undoMove,
+     resign,
+     fen: game.fen(),
+-    pgn: game.pgn(),
++    pgn: buildPgn(history, pgnResult),
+     canUndo: snapshotsRef.current.length > 0 && !isAiThinking && !pendingChoice,
+   };
+ }
+diff --git a/src/lib/chessAi.ts b/src/lib/chessAi.ts
+index 0ce2e1b..e698585 100644
+--- a/src/lib/chessAi.ts
++++ b/src/lib/chessAi.ts
+@@ -2,199 +2,455 @@ import { Chess, type Color, type PieceSymbol, type Square } from 'chess.js';
+ 
+ export type Difficulty = 'easy' | 'medium' | 'hard';
+ 
+-const PIECE_VALUES: Record<PieceSymbol, number> = {
+-  p: 100,
+-  n: 320,
+-  b: 330,
+-  r: 500,
+-  q: 900,
+-  k: 20000,
++export type AiMove = {
++  from: Square;
++  to: Square;
++  promotion?: PieceSymbol;
++  /** Pieza en la que debe quedar la casilla azul (e4/e5) tras la jugada, si aplica la regla TAICHESS. */
++  transform?: PieceSymbol;
++  score: number;
++  depth: number;
+ };
+ 
+-const PAWN_TABLE = [
+-  0,  0,  0,  0,  0,  0,  0,  0,
+-  50, 50, 50, 50, 50, 50, 50, 50,
+-  10, 10, 20, 30, 30, 20, 10, 10,
+-  5,  5, 10, 25, 25, 10,  5,  5,
+-  0,  0,  0, 20, 20,  0,  0,  0,
+-  5, -5,-10,  0,  0,-10, -5,  5,
+-  5, 10, 10,-20,-20, 10, 10,  5,
+-  0,  0,  0,  0,  0,  0,  0,  0
+-];
++const BLUE = new Set<string>(['e4', 'e5']);
++const MATE = 100000;
++const INF = 1e9;
++
++const VALUE: Record<PieceSymbol, number> = { p: 100, n: 320, b: 330, r: 500, q: 900, k: 0 };
++
++// Tablas posicionales (perspectiva blancas, índice 0 = a8).
++const PST: Record<PieceSymbol, number[]> = {
++  p: [
++    0, 0, 0, 0, 0, 0, 0, 0,
++    50, 50, 50, 50, 50, 50, 50, 50,
++    10, 10, 20, 30, 30, 20, 10, 10,
++    5, 5, 10, 25, 25, 10, 5, 5,
++    0, 0, 0, 20, 20, 0, 0, 0,
++    5, -5, -10, 0, 0, -10, -5, 5,
++    5, 10, 10, -20, -20, 10, 10, 5,
++    0, 0, 0, 0, 0, 0, 0, 0,
++  ],
++  n: [
++    -50, -40, -30, -30, -30, -30, -40, -50,
++    -40, -20, 0, 0, 0, 0, -20, -40,
++    -30, 0, 10, 15, 15, 10, 0, -30,
++    -30, 5, 15, 20, 20, 15, 5, -30,
++    -30, 0, 15, 20, 20, 15, 0, -30,
++    -30, 5, 10, 15, 15, 10, 5, -30,
++    -40, -20, 0, 5, 5, 0, -20, -40,
++    -50, -40, -30, -30, -30, -30, -40, -50,
++  ],
++  b: [
++    -20, -10, -10, -10, -10, -10, -10, -20,
++    -10, 0, 0, 0, 0, 0, 0, -10,
++    -10, 0, 5, 10, 10, 5, 0, -10,
++    -10, 5, 5, 10, 10, 5, 5, -10,
++    -10, 0, 10, 10, 10, 10, 0, -10,
++    -10, 10, 10, 10, 10, 10, 10, -10,
++    -10, 5, 0, 0, 0, 0, 5, -10,
++    -20, -10, -10, -10, -10, -10, -10, -20,
++  ],
++  r: [
++    0, 0, 0, 0, 0, 0, 0, 0,
++    5, 10, 10, 10, 10, 10, 10, 5,
++    -5, 0, 0, 0, 0, 0, 0, -5,
++    -5, 0, 0, 0, 0, 0, 0, -5,
++    -5, 0, 0, 0, 0, 0, 0, -5,
++    -5, 0, 0, 0, 0, 0, 0, -5,
++    -5, 0, 0, 0, 0, 0, 0, -5,
++    0, 0, 0, 5, 5, 0, 0, 0,
++  ],
++  q: [
++    -20, -10, -10, -5, -5, -10, -10, -20,
++    -10, 0, 0, 0, 0, 0, 0, -10,
++    -10, 0, 5, 5, 5, 5, 0, -10,
++    -5, 0, 5, 5, 5, 5, 0, -5,
++    0, 0, 5, 5, 5, 5, 0, -5,
++    -10, 5, 5, 5, 5, 5, 0, -10,
++    -10, 0, 5, 0, 0, 0, 0, -10,
++    -20, -10, -10, -5, -5, -10, -10, -20,
++  ],
++  k: [
++    -30, -40, -40, -50, -50, -40, -40, -30,
++    -30, -40, -40, -50, -50, -40, -40, -30,
++    -30, -40, -40, -50, -50, -40, -40, -30,
++    -30, -40, -40, -50, -50, -40, -40, -30,
++    -20, -30, -30, -40, -40, -30, -30, -20,
++    -10, -20, -20, -20, -20, -20, -20, -10,
++    20, 20, 0, 0, 0, 0, 20, 20,
++    20, 30, 10, 0, 0, 10, 30, 20,
++  ],
++};
+ 
+-const KNIGHT_TABLE = [
+-  -50,-40,-30,-30,-30,-30,-40,-50,
+-  -40,-20,  0,  0,  0,  0,-20,-40,
+-  -30,  0, 10, 15, 15, 10,  0,-30,
+-  -30,  5, 15, 20, 20, 15,  5,-30,
+-  -30,  0, 15, 20, 20, 15,  0,-30,
+-  -30,  5, 10, 15, 15, 10,  5,-30,
+-  -40,-20,  0,  5,  5,  0,-20,-40,
+-  -50,-40,-30,-30,-30,-30,-40,-50,
++const KING_ENDGAME = [
++  -50, -40, -30, -20, -20, -30, -40, -50,
++  -30, -20, -10, 0, 0, -10, -20, -30,
++  -30, -10, 20, 30, 30, 20, -10, -30,
++  -30, -10, 30, 40, 40, 30, -10, -30,
++  -30, -10, 30, 40, 40, 30, -10, -30,
++  -30, -10, 20, 30, 30, 20, -10, -30,
++  -30, -30, 0, 0, 0, 0, -30, -30,
++  -50, -30, -30, -30, -30, -30, -30, -50,
+ ];
+ 
+-function squareToIndex(sq: Square, color: Color): number {
+-  const file = sq.charCodeAt(0) - 97;
+-  const rank = parseInt(sq[1], 10) - 1;
+-  const row = color === 'w' ? 7 - rank : rank;
+-  return Math.min(63, Math.max(0, row * 8 + file));
+-}
++/** Evaluación estática desde el punto de vista del bando que mueve. */
++export function evaluate(game: Chess): number {
++  const board = game.board();
++  let whiteNonPawn = 0;
++  let blackNonPawn = 0;
++  let whiteBishops = 0;
++  let blackBishops = 0;
+ 
+-export function evaluateBoard(game: Chess, trackedPieces: Map<Square, { color: Color; type: 'b' | 'n' }>): number {
+-  if (game.isCheckmate()) {
+-    return game.turn() === 'w' ? -99999 : 99999;
+-  }
+-  if (game.isDraw()) {
+-    return 0;
++  for (let r = 0; r < 8; r++) {
++    for (let c = 0; c < 8; c++) {
++      const p = board[r][c];
++      if (!p || p.type === 'p' || p.type === 'k') continue;
++      if (p.color === 'w') {
++        whiteNonPawn += VALUE[p.type];
++        if (p.type === 'b') whiteBishops++;
++      } else {
++        blackNonPawn += VALUE[p.type];
++        if (p.type === 'b') blackBishops++;
++      }
++    }
+   }
+ 
++  const endgame = whiteNonPawn <= 1300 && blackNonPawn <= 1300;
+   let score = 0;
+-  const board = game.board();
+ 
+   for (let r = 0; r < 8; r++) {
+     for (let c = 0; c < 8; c++) {
+-      const piece = board[r][c];
+-      if (!piece) continue;
++      const p = board[r][c];
++      if (!p) continue;
++      const idx = p.color === 'w' ? r * 8 + c : (7 - r) * 8 + c;
++      const table = p.type === 'k' && endgame ? KING_ENDGAME : PST[p.type];
++      const v = VALUE[p.type] + table[idx];
++      score += p.color === 'w' ? v : -v;
++    }
++  }
+ 
+-      const sq = `${String.fromCharCode(97 + c)}${8 - r}` as Square;
+-      const baseValue = PIECE_VALUES[piece.type];
+-      let positional = 0;
++  if (whiteBishops >= 2) score += 30;
++  if (blackBishops >= 2) score -= 30;
+ 
+-      if (piece.type === 'p') {
+-        positional = PAWN_TABLE[squareToIndex(sq, piece.color)];
+-      } else if (piece.type === 'n') {
+-        positional = KNIGHT_TABLE[squareToIndex(sq, piece.color)];
+-      }
++  return game.turn() === 'w' ? score : -score;
++}
+ 
+-      let taichessBonus = 0;
+-      if (sq === 'e4' || sq === 'e5') {
+-        if (piece.type === 'p') {
+-          taichessBonus = 120; // High incentive for pawn to reach e4/e5
+-        } else if (piece.type === 'b' || piece.type === 'n') {
+-          taichessBonus = 180; // Potential upgrade into rook
+-        }
+-      }
++// ─────────────────────── Adaptador de jugadas (rápido) ───────────────────────
++// chess.js en modo público calcula el SAN de cada jugada (≈2 ms por nodo). Sus rutinas
++// internas generan/deshacen jugadas ~100× más rápido, así que se usan si existen y, si una
++// versión futura las cambia, se cae a la API pública (más lenta pero equivalente).
+ 
+-      const totalVal = baseValue + positional + taichessBonus;
+-      score += piece.color === 'w' ? totalVal : -totalVal;
+-    }
++type Raw = {
++  color: Color;
++  from: number;
++  to: number;
++  piece: PieceSymbol;
++  captured?: PieceSymbol;
++  promotion?: PieceSymbol;
++  flags: number;
++};
++
++type M = {
++  from: Square;
++  to: Square;
++  piece: PieceSymbol;
++  color: Color;
++  captured?: PieceSymbol;
++  promotion?: PieceSymbol;
++  raw?: Raw;
++};
++
++type Internals = {
++  _moves(o: { legal: boolean }): Raw[];
++  _makeMove(m: Raw): void;
++  _undoMove(): unknown;
++};
++
++const FILES = 'abcdefgh';
++const sq0x88 = (s: number) => `${FILES[s & 7]}${8 - (s >> 4)}` as Square;
++
++const FAST = (() => {
++  try {
++    const probe = new Chess() as unknown as Partial<Internals>;
++    return (
++      typeof probe._moves === 'function' &&
++      typeof probe._makeMove === 'function' &&
++      typeof probe._undoMove === 'function' &&
++      probe._moves({ legal: true }).length === 20
++    );
++  } catch {
++    return false;
+   }
++})();
+ 
+-  return score;
++function genMoves(game: Chess): M[] {
++  let moves: M[];
++  if (FAST) {
++    moves = (game as unknown as Internals)._moves({ legal: true }).map((r) => ({
++      from: sq0x88(r.from),
++      to: sq0x88(r.to),
++      piece: r.piece,
++      color: r.color,
++      captured: r.captured,
++      promotion: r.promotion,
++      raw: r,
++    }));
++  } else {
++    moves = game.moves({ verbose: true }).map((v) => ({
++      from: v.from,
++      to: v.to,
++      piece: v.piece,
++      color: v.color,
++      captured: v.captured,
++      promotion: v.promotion,
++    }));
++  }
++  return moves.filter((m) => !m.promotion || m.promotion === 'q');
+ }
+ 
+-export function getAiBestMove(
+-  game: Chess,
+-  trackedPieces: Map<Square, { color: Color; type: 'b' | 'n' }>,
+-  difficulty: Difficulty
+-): { from: Square; to: Square; promotion?: PieceSymbol } | null {
+-  try {
+-    const legalMoves = game.moves({ verbose: true });
+-    if (!legalMoves || legalMoves.length === 0) return null;
+-
+-    // Variety in opening moves: if moves <= 4, pick randomly among top central/good moves
+-    const moveCount = game.history().length;
+-    if (moveCount < 3 && Math.random() < 0.75) {
+-      // Good opening moves
+-      const goodOpenings = legalMoves.filter((m) =>
+-        ['e4', 'd4', 'c4', 'Nf3', 'e5', 'd5', 'c5', 'Nf6', 'Nc6', 'Nc3'].some((s) => m.san.startsWith(s))
+-      );
+-      if (goodOpenings.length > 0) {
+-        const pick = goodOpenings[Math.floor(Math.random() * goodOpenings.length)];
+-        return { from: pick.from as Square, to: pick.to as Square, promotion: pick.promotion };
+-      }
+-    }
++function doMove(game: Chess, m: M) {
++  if (FAST && m.raw) (game as unknown as Internals)._makeMove(m.raw);
++  else game.move({ from: m.from, to: m.to, promotion: m.promotion });
++}
+ 
+-    if (difficulty === 'easy') {
+-      const captures = legalMoves.filter((m) => m.captured);
+-      if (captures.length > 0 && Math.random() < 0.5) {
+-        const move = captures[Math.floor(Math.random() * captures.length)];
+-        return { from: move.from as Square, to: move.to as Square, promotion: move.promotion };
+-      }
+-      const move = legalMoves[Math.floor(Math.random() * legalMoves.length)];
+-      return { from: move.from as Square, to: move.to as Square, promotion: move.promotion };
++function undoMove(game: Chess) {
++  if (FAST) (game as unknown as Internals)._undoMove();
++  else game.undo();
++}
++
++// ───────────────────────── Transformaciones TAICHESS ─────────────────────────
++
++type TransformKind = 'first' | 'return' | null;
++
++function transformKind(m: M): TransformKind {
++  if (m.piece === 'p' && BLUE.has(m.to) && !m.promotion) return 'first';
++  if ((m.piece === 'b' || m.piece === 'n') && !BLUE.has(m.from) && BLUE.has(m.to)) return 'return';
++  return null;
++}
++
++function findKing(game: Chess, color: Color): Square | null {
++  const board = game.board();
++  for (let r = 0; r < 8; r++) {
++    for (let c = 0; c < 8; c++) {
++      const p = board[r][c];
++      if (p?.type === 'k' && p.color === color) return `${FILES[c]}${8 - r}` as Square;
+     }
++  }
++  return null;
++}
+ 
+-    const isMaximizing = game.turn() === 'w';
+-    const maxDepth = difficulty === 'hard' ? 2 : 1;
++/** Posición resultante de cambiar la pieza en `square`, o null si deja al rey propio en jaque. */
++function withPiece(fen: string, square: Square, type: PieceSymbol, color: Color): Chess | null {
++  const tmp = new Chess(fen);
++  tmp.remove(square);
++  if (!tmp.put({ type, color }, square)) return null;
++  const king = findKing(tmp, color);
++  if (!king || tmp.isAttacked(king, tmp.turn())) return null;
++  // Se recarga desde FEN: chess.js cachea movimientos y revertiría la pieza.
++  return new Chess(tmp.fen());
++}
+ 
+-    // Shuffle moves first so equally scored moves create different games!
+-    const shuffledMoves = [...legalMoves].sort(() => Math.random() - 0.5);
++// ───────────────────────────────── Búsqueda ──────────────────────────────────
+ 
+-    const scoredMoves: { move: typeof legalMoves[0]; score: number }[] = [];
++type Ctx = { deadline: number; nodes: number; stop: boolean };
+ 
+-    for (const move of shuffledMoves) {
+-      const tempGame = new Chess(game.fen());
+-      tempGame.move({ from: move.from, to: move.to, promotion: move.promotion || 'q' });
++function tick(ctx: Ctx) {
++  if ((++ctx.nodes & 127) === 0 && performance.now() > ctx.deadline) ctx.stop = true;
++}
+ 
+-      // Add a small random jitter (+-4 points) to prevent robotic repetitive games
+-      const jitter = (Math.random() - 0.5) * 8;
+-      const score = (maxDepth === 1
+-        ? evaluateBoard(tempGame, trackedPieces)
+-        : evaluateMinimax(tempGame, trackedPieces, 1, -Infinity, Infinity, !isMaximizing)) + jitter;
++function orderScore(m: M): number {
++  let s = 0;
++  if (m.captured) s += 10000 + 10 * VALUE[m.captured] - VALUE[m.piece];
++  if (m.promotion) s += 9000;
++  if (transformKind(m)) s += 8000;
++  return s;
++}
+ 
+-      scoredMoves.push({ move, score });
+-    }
++function orderedMoves(game: Chess): M[] {
++  const moves = genMoves(game);
++  const keyed = moves.map((m) => ({ m, k: orderScore(m) }));
++  keyed.sort((a, b) => b.k - a.k);
++  return keyed.map((x) => x.m);
++}
+ 
+-    // Sort by best score
+-    scoredMoves.sort((a, b) => isMaximizing ? b.score - a.score : a.score - b.score);
+-
+-    // Pick among the top 2-3 best moves for realistic variety
+-    const topCandidates = scoredMoves.slice(0, Math.min(3, scoredMoves.length));
+-    const chosen = topCandidates[Math.floor(Math.random() * topCandidates.length)].move;
+-
+-    return {
+-      from: chosen.from as Square,
+-      to: chosen.to as Square,
+-      promotion: (chosen.promotion as PieceSymbol) || 'q',
+-    };
+-  } catch (err) {
+-    console.error('Error generating AI move:', err);
+-    const moves = game.moves({ verbose: true });
+-    if (moves.length > 0) {
+-      const fallback = moves[Math.floor(Math.random() * moves.length)];
+-      return { from: fallback.from as Square, to: fallback.to as Square, promotion: fallback.promotion };
+-    }
+-    return null;
++function quiesce(game: Chess, alpha: number, beta: number, ply: number, ctx: Ctx, qd: number): number {
++  tick(ctx);
++  if (ctx.stop) return 0;
++
++  const inCheck = game.isCheck();
++  let best = -INF;
++  let moves = orderedMoves(game);
++
++  if (inCheck) {
++    if (moves.length === 0) return -MATE + ply;
++  } else {
++    const stand = evaluate(game);
++    if (stand >= beta) return stand;
++    best = stand;
++    if (stand > alpha) alpha = stand;
++    if (qd >= 5) return stand;
++    moves = moves.filter((m) => m.captured || m.promotion);
+   }
++
++  for (const m of moves) {
++    doMove(game, m);
++    const score = -quiesce(game, -beta, -alpha, ply + 1, ctx, qd + 1);
++    undoMove(game);
++    if (ctx.stop) return 0;
++    if (score > best) best = score;
++    if (score > alpha) alpha = score;
++    if (alpha >= beta) break;
++  }
++  return best;
+ }
+ 
+-function evaluateMinimax(
++function negamax(game: Chess, depth: number, alpha: number, beta: number, ply: number, ctx: Ctx): number {
++  tick(ctx);
++  if (ctx.stop) return 0;
++
++  if (depth <= 0) return quiesce(game, alpha, beta, ply, ctx, 0);
++
++  const moves = orderedMoves(game);
++  if (moves.length === 0) return game.isCheck() ? -MATE + ply : 0;
++
++  let best = -INF;
++  for (const m of moves) {
++    const { score } = playMove(game, m, depth - 1, alpha, beta, ply, ctx);
++    if (ctx.stop) return 0;
++    if (score > best) best = score;
++    if (score > alpha) alpha = score;
++    if (alpha >= beta) break;
++  }
++  return best;
++}
++
++/**
++ * Juega `m` y devuelve su valor desde el punto de vista de quien mueve.
++ * Si la jugada activa la regla TAICHESS (peón a e4/e5, alfil/caballo que llega a e4/e5),
++ * evalúa también cada transformación posible y se queda con la mejor.
++ */
++function playMove(
+   game: Chess,
+-  trackedPieces: Map<Square, { color: Color; type: 'b' | 'n' }>,
++  m: M,
+   depth: number,
+   alpha: number,
+   beta: number,
+-  isMaximizing: boolean
+-): number {
+-  if (depth === 0 || game.isGameOver()) {
+-    return evaluateBoard(game, trackedPieces);
+-  }
++  ply: number,
++  ctx: Ctx,
++): { score: number; piece?: PieceSymbol } {
++  doMove(game, m);
++  const kind = transformKind(m);
+ 
+-  const moves = game.moves({ verbose: true });
+-  const candidateMoves = moves.slice(0, 18);
+-
+-  if (isMaximizing) {
+-    let maxEval = -Infinity;
+-    for (const move of candidateMoves) {
+-      const tempGame = new Chess(game.fen());
+-      tempGame.move({ from: move.from, to: move.to, promotion: move.promotion || 'q' });
+-      const evaluation = evaluateBoard(tempGame, trackedPieces);
+-      maxEval = Math.max(maxEval, evaluation);
+-      alpha = Math.max(alpha, evaluation);
+-      if (beta <= alpha) break;
++  let bestScore = -INF;
++  let bestPiece: PieceSymbol | undefined;
++
++  const consider = (child: Chess, piece: PieceSymbol | undefined) => {
++    const a = Math.max(alpha, bestScore);
++    const score = -negamax(child, depth, -beta, -a, ply + 1, ctx);
++    if (score > bestScore) {
++      bestScore = score;
++      bestPiece = piece;
+     }
+-    return maxEval;
++  };
++
++  if (!kind) {
++    consider(game, undefined);
+   } else {
+-    let minEval = Infinity;
+-    for (const move of candidateMoves) {
+-      const tempGame = new Chess(game.fen());
+-      tempGame.move({ from: move.from, to: move.to, promotion: move.promotion || 'q' });
+-      const evaluation = evaluateBoard(tempGame, trackedPieces);
+-      minEval = Math.min(minEval, evaluation);
+-      beta = Math.min(beta, evaluation);
+-      if (beta <= alpha) break;
++    const afterFen = game.fen();
++    const alternatives: PieceSymbol[] = kind === 'first' ? ['b', 'n'] : ['r'];
++    const keep: PieceSymbol = kind === 'first' ? 'p' : m.piece;
++    consider(game, keep);
++    for (const alt of alternatives) {
++      if (ctx.stop || bestScore >= beta) break;
++      const child = withPiece(afterFen, m.to, alt, m.color);
++      if (child) consider(child, alt);
+     }
+-    return minEval;
+   }
++
++  undoMove(game);
++  return { score: bestScore, piece: bestPiece };
++}
++
++// ─────────────────────────────── API pública ────────────────────────────────
++
++type Config = { maxDepth: number; timeMs: number; margin: number; openingMargin: number };
++
++const CONFIG: Record<Difficulty, Config> = {
++  easy: { maxDepth: 1, timeMs: 300, margin: 140, openingMargin: 140 },
++  medium: { maxDepth: 3, timeMs: 700, margin: 15, openingMargin: 40 },
++  hard: { maxDepth: 8, timeMs: 1800, margin: 0, openingMargin: 12 },
++};
++
++/** Clave de posición para detectar repeticiones (FEN sin contadores). */
++export function positionKey(fen: string): string {
++  return fen.split(' ').slice(0, 4).join(' ');
++}
++
++export function searchBestMove(fen: string, difficulty: Difficulty, seen: string[] = []): AiMove | null {
++  const game = new Chess(fen);
++  let rootMoves = orderedMoves(game);
++  if (rootMoves.length === 0) return null;
++
++  const cfg = CONFIG[difficulty];
++  const fullMove = parseInt(fen.split(' ')[5] ?? '1', 10) || 1;
++  const margin = fullMove <= 4 ? Math.max(cfg.margin, cfg.openingMargin) : cfg.margin;
++  const ctx: Ctx = { deadline: performance.now() + cfg.timeMs, nodes: 0, stop: false };
++
++  const seenCount = new Map<string, number>();
++  for (const k of seen) seenCount.set(k, (seenCount.get(k) ?? 0) + 1);
++
++  type Scored = { move: M; score: number; piece?: PieceSymbol };
++  let completed: Scored[] = [];
++  let reachedDepth = 0;
++
++  for (let depth = 1; depth <= cfg.maxDepth; depth++) {
++    const scored: Scored[] = [];
++    let best = -INF;
++
++    for (const m of rootMoves) {
++      const alpha = Math.max(best - margin - 1, -INF);
++      const { score: raw, piece } = playMove(game, m, depth - 1, alpha, INF, 0, ctx);
++      if (ctx.stop) break;
++
++      let score = raw;
++      // Si la jugada completa una triple repetición, se trata como tablas.
++      doMove(game, m);
++      const repeats = seenCount.get(positionKey(game.fen())) ?? 0;
++      undoMove(game);
++      if (repeats >= 2) score = 0;
++
++      scored.push({ move: m, score, piece });
++      if (score > best) best = score;
++    }
++
++    if (ctx.stop) {
++      if (completed.length === 0 && scored.length > 0) completed = scored;
++      break;
++    }
++
++    completed = scored;
++    reachedDepth = depth;
++    scored.sort((a, b) => b.score - a.score);
++    rootMoves = scored.map((s) => s.move);
++    if (best >= MATE - 100) break; // mate encontrado
++  }
++
++  if (completed.length === 0) {
++    const m = rootMoves[0];
++    return { from: m.from, to: m.to, promotion: m.promotion, score: 0, depth: 0 };
++  }
++
++  completed.sort((a, b) => b.score - a.score);
++  const top = completed[0].score;
++  const pool = completed.filter((s) => s.score >= top - margin);
++  const pick = pool[Math.floor(Math.random() * pool.length)];
++
++  return {
++    from: pick.move.from,
++    to: pick.move.to,
++    promotion: pick.move.promotion,
++    transform: pick.piece,
++    score: pick.score,
++    depth: reachedDepth,
++  };
+ }
+diff --git a/vite.config.ts b/vite.config.ts
+index 74f81b2..16c30f3 100644
+--- a/vite.config.ts
++++ b/vite.config.ts
+@@ -16,6 +16,9 @@ export default defineConfig({
+     dedupe: ["react", "react-dom"],
+   },
+   root,
++  worker: {
++    format: "es",
++  },
+   build: {
+     outDir: path.resolve(root, "dist"),
+     emptyOutDir: true,
+diff --git a/src/lib/ai.worker.ts b/src/lib/ai.worker.ts
+new file mode 100644
+index 0000000..aec94e5
+--- /dev/null
++++ b/src/lib/ai.worker.ts
+@@ -0,0 +1,18 @@
++import { searchBestMove, type Difficulty } from "./chessAi";
++
++type Request = { id: number; fen: string; difficulty: Difficulty; seen: string[] };
++
++const scope = self as unknown as {
++  onmessage: ((e: MessageEvent<Request>) => void) | null;
++  postMessage: (message: unknown) => void;
++};
++
++scope.onmessage = (e) => {
++  const { id, fen, difficulty, seen } = e.data;
++  try {
++    scope.postMessage({ id, move: searchBestMove(fen, difficulty, seen) });
++  } catch (error) {
++    console.error("AI worker error:", error);
++    scope.postMessage({ id, move: null });
++  }
++};
+diff --git a/src/lib/aiClient.ts b/src/lib/aiClient.ts
+new file mode 100644
+index 0000000..c0efd07
+--- /dev/null
++++ b/src/lib/aiClient.ts
+@@ -0,0 +1,54 @@
++import { searchBestMove, type AiMove, type Difficulty } from "./chessAi";
++
++let worker: Worker | null = null;
++let seq = 0;
++const pending = new Map<number, (move: AiMove | null) => void>();
++
++function resolveAll(move: AiMove | null) {
++  pending.forEach((resolve) => resolve(move));
++  pending.clear();
++}
++
++function getWorker(): Worker | null {
++  if (typeof Worker === "undefined") return null;
++  if (worker) return worker;
++  try {
++    worker = new Worker(new URL("./ai.worker.ts", import.meta.url), { type: "module" });
++    worker.onmessage = (e: MessageEvent<{ id: number; move: AiMove | null }>) => {
++      const resolve = pending.get(e.data.id);
++      if (resolve) {
++        pending.delete(e.data.id);
++        resolve(e.data.move);
++      }
++    };
++    worker.onerror = () => {
++      worker?.terminate();
++      worker = null;
++      resolveAll(null);
++    };
++  } catch {
++    worker = null;
++  }
++  return worker;
++}
++
++/** Pide la jugada a la IA en un Web Worker para no congelar la interfaz. */
++export function requestAiMove(fen: string, difficulty: Difficulty, seen: string[]): Promise<AiMove | null> {
++  const w = getWorker();
++  if (!w) {
++    return new Promise((resolve) => setTimeout(() => resolve(searchBestMove(fen, difficulty, seen)), 0));
++  }
++  return new Promise((resolve) => {
++    const id = ++seq;
++    pending.set(id, resolve);
++    w.postMessage({ id, fen, difficulty, seen });
++  });
++}
++
++/** Cancela la búsqueda en curso (cambio de modo, nueva partida, deshacer…). */
++export function cancelAiRequests() {
++  if (!worker && pending.size === 0) return;
++  worker?.terminate();
++  worker = null;
++  resolveAll(null);
++}

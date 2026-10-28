@@ -16,6 +16,9 @@ export default defineConfig({
     dedupe: ["react", "react-dom"],
   },
   root,
+  worker: {
+    format: "es",
+  },
   build: {
     outDir: path.resolve(root, "dist"),
     emptyOutDir: true,

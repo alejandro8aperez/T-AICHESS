@@ -490,7 +490,7 @@ function Game() {
                 >
                   <option value="easy">Fácil (Principiante)</option>
                   <option value="medium">Medio (Estratégico)</option>
-                  <option value="hard">Difícil (Minimax)</option>
+                  <option value="hard">Difícil (búsqueda α-β)</option>
                 </select>
               </div>
             )}
