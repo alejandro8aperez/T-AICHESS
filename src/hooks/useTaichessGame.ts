@@ -474,7 +474,7 @@ export function useTaichessGame() {
     if (game.isGameOver()) return;
 
     if (gameMode === "ai-vs-ai") {
-      if (isAiVsAiPaused || isAiThinking) return;
+      if (isAiVsAiPaused) return;
 
       if (pendingChoice) {
         const timer = setTimeout(() => {
@@ -487,7 +487,7 @@ export function useTaichessGame() {
           } else if (pendingChoice.reason === "promotion") {
             choosePiece("q");
           }
-        }, 300);
+        }, 200);
         return () => clearTimeout(timer);
       }
 
@@ -503,13 +503,12 @@ export function useTaichessGame() {
         } finally {
           setIsAiThinking(false);
         }
-      }, aiSpeed);
+      }, Math.max(100, aiSpeed));
 
       return () => clearTimeout(timer);
     }
 
     if (gameMode === "ai") {
-      if (isAiThinking) return;
       const aiColor = playerColor === "w" ? "b" : "w";
 
       if (pendingChoice) {
@@ -524,7 +523,7 @@ export function useTaichessGame() {
             } else if (pendingChoice.reason === "promotion") {
               choosePiece("q");
             }
-          }, 350);
+          }, 250);
           return () => clearTimeout(timer);
         }
         return;
@@ -543,12 +542,12 @@ export function useTaichessGame() {
           } finally {
             setIsAiThinking(false);
           }
-        }, 300);
+        }, 250);
 
         return () => clearTimeout(timer);
       }
     }
-  }, [revision, gameMode, playerColor, difficulty, pendingChoice, choosePiece, commitMove, isAiThinking, isAiVsAiPaused, aiSpeed]);
+  }, [revision, gameMode, playerColor, difficulty, pendingChoice, choosePiece, commitMove, isAiVsAiPaused, aiSpeed]);
 
   const undoMove = useCallback(() => {
     if (snapshotsRef.current.length === 0 || isAiThinking || pendingChoice) return;
